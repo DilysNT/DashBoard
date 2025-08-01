@@ -1,0 +1,7 @@
+<!-- Placeholder SVG -->
+<svg width="300" height="200" viewBox="0 0 300 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="300" height="200" fill="#F1F5F9"/>
+  <path d="M125 85L135 75L155 95L175 75L185 85V125H125V85Z" fill="#CBD5E1"/>
+  <circle cx="140" cy="65" r="8" fill="#CBD5E1"/>
+  <text x="150" y="155" text-anchor="middle" fill="#64748B" font-family="Arial, sans-serif" font-size="14">No Image</text>
+</svg>
