@@ -56,6 +56,11 @@ export const navbarLinks = [
                 label: "Quản Lý Hoa Hồng",
                 icon: TrendingUp, 
                 path: "/agency/commissions",
+            },
+            {
+                label: "Quản Lý Hoàn Tiền",
+                icon: DollarSign,
+                path: "/agency/refunds",
             }
         ],
     },

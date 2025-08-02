@@ -17,6 +17,8 @@ const DepartureManagementPage = () => {
     note: "",
   });
   const [errorMessage, setErrorMessage] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState({ open: false, departure: null });
+  const [showRefundInfo, setShowRefundInfo] = useState(false);
 
   const API_BASE_URL = "http://localhost:5000/api/departure-dates";
 
@@ -24,17 +26,109 @@ const DepartureManagementPage = () => {
   const fetchDepartures = async () => {
     try {
       setLoading(true);
-      const response = await fetch(API_BASE_URL);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      console.log("Fetching departures...");
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      const headers = {
+        "Authorization": `Bearer ${localStorage.getItem('token')}`,
+      };
+
+      // Thêm agency token nếu có
+      const agencyToken = localStorage.getItem('agency_token');
+      if (agencyToken) {
+        headers["X-Agency-Token"] = agencyToken;
       }
+
+      const response = await fetch(API_BASE_URL, {
+        headers: headers,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
       const data = await response.json();
-      // API trả về mảng trực tiếp
-      const departures = Array.isArray(data) ? data : [];
-      setDepartures(departures);
+      const departures = Array.isArray(data.data) ? data.data : [];
+      console.log(`Fetched ${departures.length} departures`);
+
+      // Hiển thị departures ngay lập tức, sau đó fetch bookings
+      setDepartures(departures.map(d => ({ ...d, bookings: [] })));
+
+      // Fetch bookings song song với giới hạn concurrency
+      const BATCH_SIZE = 5; // Fetch tối đa 5 requests cùng lúc
+      const batches = [];
+      for (let i = 0; i < departures.length; i += BATCH_SIZE) {
+        batches.push(departures.slice(i, i + BATCH_SIZE));
+      }
+
+      let processedCount = 0;
+      for (const batch of batches) {
+        const batchPromises = batch.map(async (departure) => {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout cho mỗi booking request
+
+            const headers = {
+              "Authorization": `Bearer ${localStorage.getItem('token')}`,
+            };
+
+            // Thêm agency token nếu có
+            const agencyToken = localStorage.getItem('agency_token');
+            if (agencyToken) {
+              headers["X-Agency-Token"] = agencyToken;
+            }
+
+            const res = await fetch(`${API_BASE_URL}/${departure.id}/bookings`, {
+              headers: headers,
+              signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+            if (!res.ok) return { ...departure, bookings: [] };
+
+            const bookings = await res.json();
+            const confirmedBookings = Array.isArray(bookings)
+              ? bookings.filter(b => b.status === "confirmed" && b.departure_date_id === departure.id)
+              : [];
+
+            console.log(`Departure ${departure.id} - confirmed bookings: ${confirmedBookings.length}`);
+            return { ...departure, bookings: confirmedBookings };
+          } catch (error) {
+            console.warn(`Failed to fetch bookings for departure ${departure.id}:`, error.message);
+            return { ...departure, bookings: [] };
+          }
+        });
+
+        const batchResults = await Promise.allSettled(batchPromises);
+        const updatedDepartures = batchResults.map(result =>
+          result.status === 'fulfilled' ? result.value : result.reason
+        ).filter(Boolean);
+
+        // Cập nhật UI sau mỗi batch
+        setDepartures(prev => {
+          const newDepartures = [...prev];
+          updatedDepartures.forEach(updated => {
+            const index = newDepartures.findIndex(d => d.id === updated.id);
+            if (index !== -1) {
+              newDepartures[index] = updated;
+            }
+          });
+          return newDepartures;
+        });
+
+        processedCount += batch.length;
+        console.log(`Processed ${processedCount}/${departures.length} departures`);
+      }
+
     } catch (error) {
       console.error("Error fetching departures:", error);
-      setErrorMessage("Không thể tải danh sách ngày khởi hành. Vui lòng thử lại!");
+      if (error.name === 'AbortError') {
+        setErrorMessage("Tải dữ liệu quá lâu, vui lòng thử lại!");
+      } else {
+        setErrorMessage("Không thể tải danh sách ngày khởi hành. Vui lòng thử lại!");
+      }
     } finally {
       setLoading(false);
     }
@@ -76,25 +170,64 @@ const DepartureManagementPage = () => {
   // Create new departure
   const createDeparture = async (departureData) => {
     try {
-      const response = await fetch(API_BASE_URL, {
+      console.log("Creating departure with data:", departureData);
+      console.log("Authorization token:", localStorage.getItem('token') ? 'Present' : 'Missing');
+      console.log("Agency token:", localStorage.getItem('agency_token') ? 'Present' : 'Missing');
+
+      const token = localStorage.getItem('token');
+      const agencyToken = localStorage.getItem('agency_token');
+
+      const headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      };
+
+      if (agencyToken) {
+        headers["X-Agency-Token"] = agencyToken;
+      }
+
+      const response = await fetch("http://localhost:5000/api/departure-dates", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(departureData),
+        headers: headers,
+        body: JSON.stringify({
+          tour_id: "c3bc8cc7-a1a9-4095-a7f3-7b588122dee8",
+          departure_date: "2025-08-06",
+          note: ""
+        }),
       });
 
+      console.log("Response status:", response.status);
+      console.log("Response ok:", response.ok);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+          console.log("Error response data:", errorData);
+        } catch (jsonError) {
+          console.log("Could not parse error response as JSON:", jsonError);
+        }
+        throw new Error(errorMessage);
       }
 
       const newDeparture = await response.json();
-      setDepartures(prev => [...prev, newDeparture]);
+      console.log("Created departure successfully:", newDeparture);
+      setDepartures(prev => [...prev, { ...newDeparture, bookings: [] }]);
+      setErrorMessage("Thêm ngày khởi hành thành công!");
       return true;
     } catch (error) {
       console.error("Error creating departure:", error);
-      setErrorMessage(error.message || "Không thể tạo ngày khởi hành mới. Vui lòng thử lại!");
+
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        setErrorMessage("Không thể kết nối tới server. Vui lòng kiểm tra kết nối mạng và thử lại!");
+      } else if (error.message.includes('401')) {
+        setErrorMessage("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!");
+      } else if (error.message.includes('403')) {
+        setErrorMessage("Bạn không có quyền tạo ngày khởi hành cho tour này!");
+      } else {
+        setErrorMessage(error.message || "Không thể tạo ngày khởi hành mới. Vui lòng thử lại!");
+      }
       return false;
     }
   };
@@ -102,27 +235,59 @@ const DepartureManagementPage = () => {
   // Update existing departure
   const updateDeparture = async (id, departureData) => {
     try {
+      console.log("Updating departure:", id, "with data:", departureData);
+      console.log("Authorization token:", localStorage.getItem('token') ? 'Present' : 'Missing');
+      console.log("Agency token:", localStorage.getItem('agency_token') ? 'Present' : 'Missing');
+
+      const headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${localStorage.getItem('token')}`,
+      };
+
+      // Thêm agency token nếu có
+      const agencyToken = localStorage.getItem('agency_token');
+      if (agencyToken) {
+        headers["X-Agency-Token"] = agencyToken;
+      }
+
       const response = await fetch(`${API_BASE_URL}/${id}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: headers,
         body: JSON.stringify(departureData),
       });
 
+      console.log("Update response status:", response.status);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+          console.log("Update error response data:", errorData);
+        } catch (jsonError) {
+          console.log("Could not parse error response as JSON:", jsonError);
+        }
+        throw new Error(errorMessage);
       }
 
       const updatedDeparture = await response.json();
+      console.log("Updated departure successfully:", updatedDeparture);
       setDepartures(prev => prev.map(departure =>
-        departure.id === id ? updatedDeparture : departure
+        departure.id === id ? { ...updatedDeparture, bookings: departure.bookings || [] } : departure
       ));
       return true;
     } catch (error) {
       console.error("Error updating departure:", error);
-      setErrorMessage(error.message || "Không thể cập nhật ngày khởi hành. Vui lòng thử lại!");
+
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        setErrorMessage("Không thể kết nối tới server. Vui lòng kiểm tra kết nối mạng và thử lại!");
+      } else if (error.message.includes('401')) {
+        setErrorMessage("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!");
+      } else if (error.message.includes('403')) {
+        setErrorMessage("Bạn không có quyền sửa ngày khởi hành này!");
+      } else {
+        setErrorMessage(error.message || "Không thể cập nhật ngày khởi hành. Vui lòng thử lại!");
+      }
       return false;
     }
   };
@@ -130,29 +295,94 @@ const DepartureManagementPage = () => {
   // Delete departure
   const deleteDeparture = async (id) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/${id}`, {
-        method: "DELETE",
-      });
+      console.log("Deleting departure:", id);
+      console.log("Authorization token:", localStorage.getItem('token') ? 'Present' : 'Missing');
+      console.log("Agency token:", localStorage.getItem('agency_token') ? 'Present' : 'Missing');
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      const headers = {
+        "Authorization": `Bearer ${localStorage.getItem('token')}`,
+      };
+
+      // Thêm agency token nếu có
+      const agencyToken = localStorage.getItem('agency_token');
+      if (agencyToken) {
+        headers["X-Agency-Token"] = agencyToken;
       }
 
+      const response = await fetch(`${API_BASE_URL}/${id}`, {
+        method: "DELETE",
+        headers: headers,
+      });
+
+      console.log("Delete response status:", response.status);
+
+      if (!response.ok) {
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+          console.log("Delete error response data:", errorData);
+        } catch (jsonError) {
+          console.log("Could not parse error response as JSON:", jsonError);
+        }
+        throw new Error(errorMessage);
+      }
+
+      console.log("Deleted departure successfully");
       setDepartures(prev => prev.filter(departure => departure.id !== id));
       return true;
     } catch (error) {
       console.error("Error deleting departure:", error);
-      setErrorMessage(error.message || "Không thể xóa ngày khởi hành. Vui lòng thử lại!");
+
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        setErrorMessage("Không thể kết nối tới server. Vui lòng kiểm tra kết nối mạng và thử lại!");
+      } else if (error.message.includes('401')) {
+        setErrorMessage("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!");
+      } else if (error.message.includes('403')) {
+        setErrorMessage("Bạn không có quyền xóa ngày khởi hành này!");
+      } else {
+        setErrorMessage(error.message || "Không thể xóa ngày khởi hành. Vui lòng thử lại!");
+      }
       return false;
     }
   };
 
   // Handle delete with confirmation
-  const handleDelete = async (id) => {
-    if (window.confirm("Bạn có chắc chắn muốn xóa ngày khởi hành này?")) {
-      await deleteDeparture(id);
+  const handleDelete = (id) => {
+    console.log(`HandleDelete - Departure ID: ${id}`);
+    const departure = departures.find(d => d.id === id);
+    console.log(`HandleDelete - Departure ID: ${id}, Bookings count: ${departure?.bookings?.length || 0}`);
+    if (departure && Array.isArray(departure.bookings) && departure.bookings.length > 0) {
+      setConfirmDelete({ open: true, departure });
+    } else {
+      setConfirmDelete({ open: true, departure });
     }
+  };
+
+  // Confirm delete departure
+  const confirmDeleteDeparture = () => {
+    setShowRefundInfo(true);
+  };
+
+  const handleRefundAndDelete = async () => {
+    const departure = confirmDelete.departure;
+    if (departure && Array.isArray(departure.bookings) && departure.bookings.length > 0) {
+      for (const booking of departure.bookings) {
+        try {
+          await fetch(`/api/bookings/${booking.id}/cancel`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${localStorage.getItem('token')}`,
+            },
+            body: JSON.stringify({ reason: "Agency xóa ngày khởi hành, hoàn tiền cho user." })
+          });
+        } catch (err) { }
+      }
+    }
+    await deleteDeparture(departure.id);
+    setShowRefundInfo(false);
+    setConfirmDelete({ open: false, departure: null });
   };
 
   // Handle save departure (create or update)
@@ -222,12 +452,45 @@ const DepartureManagementPage = () => {
     resetForm();
   };
 
+  // Handle cancel departure
+  const handleCancelDeparture = async (departure) => {
+    if (!window.confirm("Bạn có chắc chắn muốn hủy tour này?")) return;
+    try {
+      // Gọi API cancel booking (cần có booking_id trong departure)
+      const bookingId = departure.booking_id;
+      if (!bookingId) {
+        setErrorMessage("Không tìm thấy booking liên quan để hủy.");
+        return;
+      }
+      const response = await fetch(`/api/bookings/${bookingId}/cancel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({ reason: "Ngày khởi hành không đủ số lượng tối thiểu, cần hủy booking." })
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Hủy booking thất bại.");
+      }
+      // Xóa ngày khởi hành khỏi danh sách
+      setDepartures(prev => prev.filter(d => d.id !== departure.id));
+      alert("Đã hủy tour và xóa ngày khởi hành thành công!");
+    } catch (error) {
+      setErrorMessage(error.message || "Hủy tour thất bại.");
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-6 flex justify-center items-center min-h-screen">
-        <div className="flex items-center gap-2">
-          <Loader2 className="animate-spin" size={24} />
-          <span>Đang tải danh sách ngày khởi hành...</span>
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="animate-spin" size={32} />
+          <div className="text-center">
+            <div className="text-lg font-medium">Đang tải danh sách ngày khởi hành...</div>
+            <div className="text-sm text-gray-500 mt-1">Vui lòng đợi trong giây lát</div>
+          </div>
         </div>
       </div>
     );
@@ -258,7 +521,7 @@ const DepartureManagementPage = () => {
             className="absolute top-0 right-0 px-4 py-3"
           >
             <svg className="fill-current h-6 w-6 text-red-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-              <path d="M14.348 14.849a1 1 0 01-1.414 0L10 11.414l-2.934 2.935a1 1 0 11-1.414-1.414l2.935-2.934-2.935-2.934a1 1 0 011.414-1.414L10 8.586l2.934-2.935a1 1 0 011.414 1.414L11.414 10l2.934 2.935a1 1 0 010 1.414z"/>
+              <path d="M14.348 14.849a1 1 0 01-1.414 0L10 11.414l-2.934 2.935a1 1 0 11-1.414-1.414l2.935-2.934-2.935-2.934a1 1 0 011.414-1.414L10 8.586l2.934-2.935a1 1 0 011.414 1.414L11.414 10l2.934 2.935a1 1 0 010 1.414z" />
             </svg>
           </button>
         </div>
@@ -355,13 +618,14 @@ const DepartureManagementPage = () => {
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Ngày kết thúc</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Số ngày</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Số đêm</th>
+              <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Bookings</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Hành động</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
             {currentDepartures.length === 0 ? (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-sm text-slate-500">
+                <td colSpan={9} className="p-6 text-center text-sm text-slate-500">
                   {searchTerm ? "Không tìm thấy ngày khởi hành phù hợp." : "Chưa có ngày khởi hành nào."}
                 </td>
               </tr>
@@ -403,6 +667,18 @@ const DepartureManagementPage = () => {
                       {departure.number_of_nights}
                     </span>
                   </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    {departure.bookings ? (
+                      <span className={`text-xs font-medium px-2.5 py-0.5 rounded ${departure.bookings.length > 0
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-gray-100 text-gray-800'
+                        }`}>
+                        {departure.bookings.length} booking{departure.bookings.length !== 1 ? 's' : ''}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400">Đang tải...</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-sm text-slate-700 relative">
                     <button
                       aria-haspopup="true"
@@ -439,6 +715,7 @@ const DepartureManagementPage = () => {
                             <Trash size={16} className="mr-2" /> Xóa
                           </button>
                         </li>
+
                       </ul>
                     )}
                   </td>
@@ -461,6 +738,59 @@ const DepartureManagementPage = () => {
         showSizeChanger={true}
         pageSizeOptions={[5, 10, 20, 50]}
       />
+
+      {/* Confirmation Delete Modal */}
+      {confirmDelete.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <h2 className="text-xl font-semibold text-red-700 mb-4">Cảnh báo xóa ngày khởi hành</h2>
+            <p className="mb-4">
+              {confirmDelete.departure && Array.isArray(confirmDelete.departure.bookings) && confirmDelete.departure.bookings.length > 0
+                ? `Ngày khởi hành này đang có ${confirmDelete.departure.bookings.length} booking đã đặt. Nếu xóa, agency phải hoàn tất cả tiền cho user. Bạn có chắc chắn muốn tiếp tục?`
+                : "Bạn có chắc chắn muốn xóa ngày khởi hành này?"}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setConfirmDelete({ open: false, departure: null })}
+                className="px-4 py-2 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={confirmDeleteDeparture}
+                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+              >
+                Xác nhận xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Refund Info Modal */}
+      {showRefundInfo && confirmDelete.departure && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <h2 className="text-xl font-semibold text-green-700 mb-4">Thông báo hoàn tiền</h2>
+            <p className="mb-4">
+              Hệ thống sẽ tự động hoàn tiền cho {confirmDelete.departure.bookings?.length || 0} user đã đặt tour với ngày khởi hành này.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setShowRefundInfo(false); setConfirmDelete({ open: false, departure: null }); }}
+                className="px-4 py-2 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleRefundAndDelete}
+                className="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+              >
+                Tiếp tục xóa và hoàn tiền
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

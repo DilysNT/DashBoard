@@ -4,7 +4,7 @@ import { useAuth } from "../../../contexts/auth-context";
 
 const PromotionManagementPage = () => {
   const { user } = useAuth();
-  const agencyId = user?.agency_id || user?.id;
+  const agencyId = user.agency_id;
   const [promotions, setPromotions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -25,19 +25,25 @@ const PromotionManagementPage = () => {
     is_active: true
   });
 
-  const API_BASE_URL = "http://localhost:5000/api/promotions/active";
+  const API_BASE_URL = "http://localhost:5000/api/promotions";
 
   // Fetch promotions from API (chỉ lấy của agency hiện tại)
   const fetchPromotions = async () => {
     try {
       setLoading(true);
-      const response = await fetch(API_BASE_URL);
+      // Truyền agency_id qua query nếu backend hỗ trợ, hoặc filter ở FE như cũ
+      const response = await fetch(`${API_BASE_URL}?agency_id=${agencyId}`, {
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
+        }
+      });
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(errorText);
       }
       const res = await response.json();
-      const allPromos = Array.isArray(res) ? res : (res.data || []);
+      const allPromos = Array.isArray(res.promotions) ? res.promotions : [];
       setPromotions(
         allPromos
           .filter(promo => promo.agency_id === agencyId)
@@ -74,6 +80,7 @@ const PromotionManagementPage = () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
         },
         body: JSON.stringify({ ...promotionData, agency_id: agencyId }),
       });
@@ -82,7 +89,7 @@ const PromotionManagementPage = () => {
         throw new Error(errorText);
       }
       const res = await response.json();
-      const newPromotion = res.data || res;
+      const newPromotion = res.promotion || res.data || res;
       setPromotions(prev => [...prev, newPromotion]);
       alert("Thêm mã giảm giá thành công!");
       return true;
@@ -100,6 +107,7 @@ const PromotionManagementPage = () => {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
         },
         body: JSON.stringify({ ...promotionData, agency_id: agencyId }),
       });
@@ -128,6 +136,11 @@ const PromotionManagementPage = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/${id}`, {
         method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({ ...promotionData, agency_id: agencyId }),
       });
       if (!response.ok) {
         const errorText = await response.text();
@@ -184,16 +197,20 @@ const PromotionManagementPage = () => {
       name: newPromotion.name,
       description: newPromotion.description || null,
       discount_type: newPromotion.discount_type,
-      discount_value: parseFloat(newPromotion.discount_value),
       min_order_amount: newPromotion.min_order_amount ? parseFloat(newPromotion.min_order_amount) : null,
       max_discount_amount: newPromotion.max_discount_amount ? parseFloat(newPromotion.max_discount_amount) : null,
       start_date: newPromotion.start_date,
       end_date: newPromotion.end_date,
       max_usage: newPromotion.max_usage ? parseInt(newPromotion.max_usage) : null,
-      is_active: newPromotion.is_active
+      is_active: newPromotion.is_active,
+      agency_id: user.agency_id // hoặc user.id nếu backend trả về đúng agency id
     };
-    if (promotionData.discount_type === 'fixed_amount') {
-      promotionData.discount_amount = promotionData.discount_value;
+    if (newPromotion.discount_type === 'fixed_amount') {
+      promotionData.discount_value = parseFloat(newPromotion.discount_value);
+      promotionData.discount_amount = parseFloat(newPromotion.discount_value);
+    } else if (newPromotion.discount_type === 'percentage') {
+      promotionData.discount_value = parseFloat(newPromotion.discount_value);
+      promotionData.discount_percent = parseFloat(newPromotion.discount_value);
     }
     if (editingPromotion) {
       success = await updatePromotion(editingPromotion.id, promotionData);
@@ -281,9 +298,6 @@ const PromotionManagementPage = () => {
     const now = new Date();
     const startDate = new Date(promotion.start_date);
     const endDate = new Date(promotion.end_date);
-    if (!promotion.is_active || promotion.is_active === false || promotion.is_active === "false") {
-      return { text: 'Không hoạt động', color: 'bg-gray-100 text-gray-800' };
-    }
     if (now < startDate) {
       return { text: 'Chưa bắt đầu', color: 'bg-blue-100 text-blue-800' };
     }
@@ -292,7 +306,6 @@ const PromotionManagementPage = () => {
     }
     return { text: 'Đang hoạt động', color: 'bg-green-100 text-green-800' };
   };
-
   if (loading) {
     return (
       <div className="p-6 flex justify-center items-center min-h-screen">
@@ -349,8 +362,8 @@ const PromotionManagementPage = () => {
             {filteredPromotions.length === 0 ? (
               <tr>
                 <td colSpan={6} className="p-6 text-center text-sm text-slate-500">
-                  {promotions.length === 0 
-                    ? 'Không có mã giảm giá nào' 
+                  {promotions.length === 0
+                    ? 'Không có mã giảm giá nào'
                     : 'Không tìm thấy mã giảm giá phù hợp.'
                   }
                 </td>
@@ -368,7 +381,7 @@ const PromotionManagementPage = () => {
                             {promotion.code}
                           </div>
                           <div className="text-xs text-slate-500">
-                            ID: {promotion.id.slice(0, 8)}...
+                            ID: {promotion.id ? String(promotion.id).slice(0, 8) : "N/A"}...
                           </div>
                         </div>
                       </div>
@@ -628,4 +641,4 @@ const PromotionManagementPage = () => {
   );
 };
 
-export default PromotionManagementPage; 
+export default PromotionManagementPage;

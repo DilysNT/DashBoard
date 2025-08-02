@@ -32,6 +32,7 @@ import CommissionAdminPage from "./routes/commissions/page";
 import PaymentManagementPage from "./AgencyDashboard/routes/payments/page";
 import PromotionManagementPageAgency from "./AgencyDashboard/routes/discounts/page";
 import AgencyCommissionPage from "./AgencyDashboard/routes/commision/page";
+import RefundManagementPage from "./AgencyDashboard/routes/refund/page";
 
 function App() {
     const router = createBrowserRouter([
@@ -158,6 +159,10 @@ function App() {
                     path: "discounts",
                     element: <ErrorBoundary><PromotionManagementPageAgency /></ErrorBoundary>,
                 },
+                {
+                    path: "refunds",
+                    element: <RefundManagementPage />,
+                }
             ],
         },
         {
