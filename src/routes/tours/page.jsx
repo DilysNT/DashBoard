@@ -37,7 +37,7 @@ const ToursPage = () => {
     duration_days: 1,
     duration_nights: 0,
     departure_location: "",
-    price: 0, // THÊM TRƯỜNG PRICE
+    price: 0,
     max_participants: 10,
     min_participants: 1,
     status: "draft",
@@ -276,13 +276,14 @@ const ToursPage = () => {
     }
   };
 
-  // Hàm xác định có hiển thị nút duyệt/từ chối không
-  const canApproveOrReject = (status) => {
+  // Kiểm tra trạng thái để hiển thị nút cho admin
+  const canAdminApproveOrReject = (status) => {
     if (!status) return false;
     const normalized = status.toLowerCase().replace(/\s/g, '');
-    return ["chờduyệt", "draft", "pending", "đãtừchối", "rejected"].includes(normalized);
+    return ["chờduyệt", "pending"].includes(normalized);
   };
 
+  // Hàm xử lý duyệt/từ chối cho admin
   const handleToggleStatus = async (id, action) => {
     if (action === "approve" && !window.confirm("Bạn có chắc chắn muốn duyệt tour này?")) return;
     if (action === "reject" && !window.confirm("Bạn có chắc chắn muốn từ chối tour này?")) return;
@@ -291,13 +292,11 @@ const ToursPage = () => {
       if (userRole === 'admin') {
         if (action === 'approve') {
           await TourService.approveAdminTour(id);
+          window.alert("Duyệt tour thành công!");
         } else if (action === 'reject') {
           const reason = prompt("Lý do từ chối (tùy chọn):");
           await TourService.rejectAdminTour(id, reason);
-        } else {
-          // fallback: update status
-          const newStatus = action === "approve" ? "Đang hoạt động" : "Đã hủy";
-          await TourService.updateAdminTourStatus(id, newStatus);
+          window.alert("Từ chối tour thành công!");
         }
         await fetchAdminTours(pagination.page, pagination.limit, filters);
       } else {
@@ -314,7 +313,7 @@ const ToursPage = () => {
             name: tour.name,
             agency_id: tour.agency_id
           });
-        } else {
+        } else if (action === "reject") {
           const reason = prompt("Lý do từ chối (tùy chọn):");
           await NotificationService.notifyTourRejected({
             id: tour.id,
@@ -324,7 +323,7 @@ const ToursPage = () => {
         }
       }
     } catch (error) {
-      alert(error.message || "Có lỗi khi cập nhật trạng thái tour!");
+      window.alert(error.message || "Có lỗi khi cập nhật trạng thái tour!");
     } finally {
       setLoading(false);
     }
@@ -427,10 +426,23 @@ const ToursPage = () => {
   };
 
   // Hàm lưu tour mới hoặc cập nhật tour
+  const [pendingSave, setPendingSave] = useState(false);
+
+  useEffect(() => {
+    // Khi pendingSave = true và newDepartureDates đã là object, gọi lại handleSaveTour
+    if (pendingSave && userRole === 'admin' && !editingTour && Array.isArray(newDepartureDates) && typeof newDepartureDates[0] === 'object') {
+      setPendingSave(false);
+      handleSaveTour();
+    }
+  }, [newDepartureDates, pendingSave, userRole, editingTour]);
+
   const handleSaveTour = async () => {
-    // Log giá trị state để debug
-    console.log('🔍 DEBUG newTour:', newTour);
-    console.log('🔍 DEBUG userRole:', userRole);
+    // Nếu là admin tạo mới và newDepartureDates là mảng string, chuyển thành object rồi submit lại
+    if (userRole === 'admin' && !editingTour && Array.isArray(newDepartureDates) && typeof newDepartureDates[0] === 'string') {
+      setNewDepartureDates(newDepartureDates.map(date => ({ departure_date: date })));
+      setPendingSave(true);
+      return;
+    }
 
     // Kiểm tra các trường bắt buộc
     const missingFields = [];
@@ -438,72 +450,75 @@ const ToursPage = () => {
     if (!newTour.departure_location) missingFields.push("Điểm khởi hành");
     if (!newTour.destination_id) missingFields.push("Điểm đến");
     if (!newTour.tour_type) missingFields.push("Loại tour");
-    if (!Array.isArray(newTour.departure_date_ids) || newTour.departure_date_ids.length === 0) missingFields.push("Ngày khởi hành");
+    if (userRole === 'admin' && !editingTour) {
+      if (userRole === 'admin' && !editingTour && Array.isArray(newDepartureDates) && typeof newDepartureDates[0] === 'string') {
+        setNewDepartureDates(newDepartureDates.map(date => ({ departure_date: date })));
+        // return để chờ state cập nhật, sau đó submit lại
+        return;
+      }
+    } else {
+      if (!Array.isArray(newTour.departure_date_ids) || newTour.departure_date_ids.length === 0) {
+        missingFields.push("Ngày khởi hành");
+      }
+    }
     if (images.length === 0) missingFields.push("Hình ảnh tour");
     if (userRole === 'admin' && (!newTour.agency_id || typeof newTour.agency_id !== 'string' || newTour.agency_id.trim() === '')) missingFields.push("Agency");
+
+    // Kiểm tra ngày khởi hành hợp lệ
+    let validDepartureDates = [];
+    if (userRole === 'admin' && !editingTour) {
+      validDepartureDates = newDepartureDates.filter(d => d && d.departure_date);
+      if (validDepartureDates.length === 0) missingFields.push("Ngày khởi hành hợp lệ");
+    } else {
+      const depDatesArr = Array.isArray(departureDates.data) ? departureDates.data : [];
+      validDepartureDates = depDatesArr.length
+        ? (newTour.departure_date_ids || []).filter(id => {
+          const match = depDatesArr.find(d =>
+            d.id === id ||
+            d.departure_date === id ||
+            (d.departure_date && d.departure_date.slice(0, 10) === id)
+          );
+          return !!match;
+        })
+        : [];
+      if (validDepartureDates.length === 0) missingFields.push("Ngày khởi hành hợp lệ");
+    }
 
     if (missingFields.length > 0) {
       alert("Vui lòng điền đầy đủ thông tin bắt buộc:\n" + missingFields.join(", "));
       return;
     }
 
-    // Lấy tên điểm đến từ ID
-    const selectedDestination = destinations.find(dest => dest.id === newTour.destination_id);
-    const destinationName = selectedDestination ? selectedDestination.name : "";
-
-    // Lấy tên location từ ID
+    // Chuẩn bị dữ liệu gửi lên BE
     const selectedLocation = locations.find(loc => loc.id === selectedLocationId);
     const locationName = selectedLocation ? selectedLocation.name : "";
-
-    // Mapping departureDates từ id sang object
-    const selectedDepartureDates = (newTour.departure_date_ids || []).map(id => {
-      const found = departureDates.find(d => d.id === id);
-      return found ? {
-        departure_date: found.departure_date,
-        end_date: found.end_date,
-        number_of_days: found.number_of_days,
-        number_of_nights: found.number_of_nights
-      } : null;
-    }).filter(Boolean);
-
-    // Sử dụng filteredDestinations đã định nghĩa ở phạm vi component
     const selectedDestinationNames = filteredDestinations
       .filter(dest => (newTour.selectedDestinations || []).includes(dest.id))
       .map(dest => dest.name);
     const destinationString = selectedDestinationNames.join(', ');
 
-    // Chuẩn bị dữ liệu gửi lên BE
     const body = {
       ...newTour,
       location: locationName,
       destination: destinationString,
-      departureDates: selectedDepartureDates,
+      departureDates: newTour.departure_date_ids || [],
       images: images.map(img => ({ image_url: img.url, is_main: img.is_main })),
       included_service_ids: newTour.selectedIncludedServices || [],
       category_ids: newTour.selectedCategories || [],
       hotel_ids: newTour.selectedHotels || [],
-      excluded_service_ids: newTour.selectedExcludedServices || [], // ✅ Tạo field
+      excluded_service_ids: Array.isArray(newTour.selectedExcludedServices) ? newTour.selectedExcludedServices : [],
       agency_id: userRole === 'admin' ? String(newTour.agency_id) : newTour.agency_id || localStorage.getItem('agency_id') || '1',
     };
 
-    // ✅ Xóa các trường không cần gửi lên BE
+    // Xóa các trường không cần gửi lên BE
     delete body.selectedIncludedServices;
     delete body.selectedCategories;
     delete body.selectedHotels;
-    delete body.selectedExcludedServices; // ✅ Xóa field mapping cũ
-    // ❌ KHÔNG XÓA excluded_service_ids!
-    // delete body.excluded_service_ids; // <-- XÓA DÒNG NÀY
     delete body.departureDates;
     delete body.departure_date_id;
     delete body.location_id;
     delete body.destination_id;
-    delete body.departure_date_ids;
     delete body.selectedDestinations;
-
-    // ✅ Debug logs
-    console.log('🔍 DEBUG selectedExcludedServices:', newTour.selectedExcludedServices);
-    console.log('🔍 DEBUG excluded_service_ids in body:', body.excluded_service_ids);
-    console.log('🔍 DEBUG final body:', body);
 
     // Set status theo logic
     if (!editingTour) {
@@ -515,14 +530,12 @@ const ToursPage = () => {
     try {
       let newTourData;
       if (editingTour) {
-        console.log('🔍 DEBUG: Updating tour with ID:', editingTour.id);
         if (userRole === 'admin') {
           newTourData = await TourService.updateAdminTour(editingTour.id, body);
         } else {
           newTourData = await TourService.updateTour(editingTour.id, body);
         }
       } else {
-        console.log('🔍 DEBUG: Creating new tour');
         if (userRole === 'admin') {
           newTourData = await TourService.createAdminTour(body);
         } else {
@@ -561,10 +574,10 @@ const ToursPage = () => {
         selectedCategories: [],
         selectedHotels: [],
         selectedIncludedServices: [],
-        selectedExcludedServices: [], // ✅ Đảm bảo có field này
+        selectedExcludedServices: [],
         departure_date_ids: [],
         tour_type: '',
-        selectedDestinations: [], // ✅ Thêm field này
+        selectedDestinations: [],
       });
     } catch (error) {
       console.error('🔍 DEBUG: Error saving tour:', error);
@@ -1561,7 +1574,7 @@ const ToursPage = () => {
             <tr>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Tên tour</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Điểm đến</th>
-              <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Thời lượng</th>
+             <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Thời lượng</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Giá</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Trạng thái</th>
               <th className="whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-700">Hành động</th>
@@ -1589,28 +1602,24 @@ const ToursPage = () => {
                         tour.status === "Chờ duyệt" ? "bg-yellow-100 text-yellow-800" :
                           tour.status === "Đã hủy" ? "bg-red-100 text-red-800" :
                             tour.status === "Ngừng hoạt động" ? "bg-gray-100 text-gray-800" :
-                              "bg-gray-100 text-gray-800"
+                              tour.status === "Từ chối" ? "bg-red-100 text-red-800" :
+                                "bg-gray-100 text-gray-800"
                         }`}
                     >
                       {tour.status}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700 relative">
-                    <button
-                      aria-haspopup="true"
-                      aria-expanded={dropdownOpenId === tour.id}
-                      onClick={() => toggleDropdown(tour.id)}
-                      className="inline-flex items-center rounded-md p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <MoreHorizontal size={20} />
-                    </button>
-                    {dropdownOpenId === tour.id && (
-                      <ul
-                        role="menu"
-                        aria-label="Hành động"
-                        className="absolute right-0 z-10 mt-1 w-36 origin-top-right rounded-md border border-slate-200 bg-white shadow-lg"
+                    <div className="relative">
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 flex items-center"
+                        onClick={() => toggleDropdown(tour.id)}
                       >
-                        <>
+                        <MoreHorizontal size={18} />
+                      </button>
+                      {dropdownOpenId === tour.id && (
+                        <ul className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded shadow-lg z-10">
                           <li>
                             <button
                               role="menuitem"
@@ -1648,20 +1657,32 @@ const ToursPage = () => {
                             </>
                           )}
                           {/* Gửi duyệt: chỉ agency, trạng thái là draft/chờ duyệt */}
-                          {userRole === 'agency' && canApproveOrReject(tour.status) && (
-                            <li>
-                              <button
-                                role="menuitem"
-                                onClick={() => handleToggleStatus(tour.id, "approve")}
-                                className="block w-full px-4 py-2 text-left text-sm text-green-600 hover:bg-slate-100 flex items-center"
-                              >
-                                <Check size={16} className="mr-2" /> Gửi duyệt
-                              </button>
-                            </li>
+                          {userRole === 'admin' && canAdminApproveOrReject(tour.status) && (
+                            <>
+                              <li>
+                                <button
+                                  role="menuitem"
+                                  onClick={() => handleToggleStatus(tour.id, "approve")}
+                                  className="block w-full px-4 py-2 text-left text-sm text-green-600 hover:bg-slate-100 flex items-center"
+                                >
+                                  <Check size={16} className="mr-2" /> Duyệt
+                                </button>
+                              </li>
+                              <li>
+                                <button
+                                  role="menuitem"
+                                  onClick={() => handleToggleStatus(tour.id, "reject")}
+                                  className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-slate-100 flex items-center"
+                                >
+                                  <XCircle size={16} className="mr-2" /> Từ chối
+                                </button>
+                              </li>
+                            </>
                           )}
-                        </>
-                      </ul>
-                    )}
+                        </ul>
+
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))

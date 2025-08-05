@@ -28,14 +28,14 @@ class TourService {
     console.log('🧪 Testing excluded services assignment...');
     console.log('Tour ID:', tourId);
     console.log('Service IDs to assign:', serviceIds);
-    
+
     try {
       // Get current excluded services
       const currentResponse = await axios.get(`${API_BASE_URL}/tours/${tourId}/excluded-services`, {
         headers: this.getAuthHeaders()
       });
       console.log('📋 Current excluded services:', currentResponse.data);
-      
+
       // Try to assign each service
       for (const serviceId of serviceIds) {
         try {
@@ -46,13 +46,13 @@ class TourService {
           console.error(`❌ Failed to assign ${serviceId}:`, error.response?.data || error.message);
         }
       }
-      
+
       // Get updated excluded services
       const updatedResponse = await axios.get(`${API_BASE_URL}/tours/${tourId}/excluded-services`, {
         headers: this.getAuthHeaders()
       });
       console.log('📋 Updated excluded services:', updatedResponse.data);
-      
+
       return updatedResponse.data;
     } catch (error) {
       console.error('❌ Test failed:', error);
@@ -80,22 +80,22 @@ class TourService {
   static async assignExcludedServicesBulk(tourId, serviceIds) {
     try {
       console.log(`🔗 Bulk assigning ${serviceIds.length} excluded services to tour ${tourId}:`, serviceIds);
-      const assignPromises = serviceIds.map(serviceId => 
+      const assignPromises = serviceIds.map(serviceId =>
         this.assignExcludedService(tourId, serviceId)
       );
       const results = await Promise.allSettled(assignPromises);
-      
+
       const successful = results.filter(r => r.status === 'fulfilled').length;
       const failed = results.filter(r => r.status === 'rejected').length;
-      
+
       console.log(`✅ Excluded services assignment: ${successful} success, ${failed} failed`);
-      
+
       if (failed > 0) {
-        console.warn('⚠️ Some excluded services failed to assign:', 
+        console.warn('⚠️ Some excluded services failed to assign:',
           results.filter(r => r.status === 'rejected').map(r => r.reason)
         );
       }
-      
+
       return { successful, failed, results };
     } catch (error) {
       console.error('❌ assignExcludedServicesBulk error:', error);
@@ -123,14 +123,14 @@ class TourService {
   static async assignIncludedServicesBulk(tourId, serviceIds) {
     try {
       console.log(`🔗 Bulk assigning ${serviceIds.length} included services to tour ${tourId}:`, serviceIds);
-      const assignPromises = serviceIds.map(serviceId => 
+      const assignPromises = serviceIds.map(serviceId =>
         this.assignIncludedService(tourId, serviceId)
       );
       const results = await Promise.allSettled(assignPromises);
-      
+
       const successful = results.filter(r => r.status === 'fulfilled').length;
       const failed = results.filter(r => r.status === 'rejected').length;
-      
+
       console.log(`✅ Included services assignment: ${successful} success, ${failed} failed`);
       return { successful, failed, results };
     } catch (error) {
@@ -159,14 +159,14 @@ class TourService {
   static async assignHotelsBulk(tourId, hotelIds) {
     try {
       console.log(`🔗 Bulk assigning ${hotelIds.length} hotels to tour ${tourId}:`, hotelIds);
-      const assignPromises = hotelIds.map(hotelId => 
+      const assignPromises = hotelIds.map(hotelId =>
         this.assignHotel(tourId, hotelId)
       );
       const results = await Promise.allSettled(assignPromises);
-      
+
       const successful = results.filter(r => r.status === 'fulfilled').length;
       const failed = results.filter(r => r.status === 'rejected').length;
-      
+
       console.log(`✅ Hotels assignment: ${successful} success, ${failed} failed`);
       return { successful, failed, results };
     } catch (error) {
@@ -219,11 +219,11 @@ class TourService {
   static async getTourComplete(tourId) {
     try {
       console.log('🔍 TourService.getTourComplete - Calling GET /api/tours/:id/complete for:', tourId);
-      
+
       const response = await axios.get(`${API_BASE_URL}/tours/${tourId}/complete`, {
         headers: this.getAuthHeaders()
       });
-      
+
       console.log('✅ TourService.getTourComplete response:', response.data);
       return response.data;
     } catch (error) {
@@ -236,7 +236,7 @@ class TourService {
   // Lấy từng phần riêng biệt nếu endpoint complete không có
   static async getTourDetailsSeparately(tourId) {
     const headers = this.getAuthHeaders();
-    
+
     const [
       tourData,
       departures,
@@ -256,7 +256,7 @@ class TourService {
     ]);
 
     const tour = tourData.status === 'fulfilled' ? tourData.value.data : {};
-    
+
     // Merge all data
     return {
       ...tour,
@@ -284,12 +284,11 @@ class TourService {
       min_participants: parseInt(tourData.min_participants) || 1,
       images: tourData.images || [],
       departureDates: tourData.departureDates || [],
-      // Dịch vụ bao gồm
-      selectedIncludedServices: tourData.selectedIncludedServices || tourData.included_service_ids || [],
-      // Danh mục
-      selectedCategories: tourData.selectedCategories || tourData.category_ids || [],
-      // Khách sạn
-      hotel_ids: tourData.selectedHotels || tourData.hotel_ids || [],
+      included_service_ids: tourData.included_service_ids || [],
+      excluded_service_ids: tourData.excluded_service_ids || [],
+      category_ids: tourData.category_ids || [],
+      hotel_ids: tourData.hotel_ids || [],
+      status: tourData.status, // status chuẩn hóa từ FE
     };
     console.log('🚀 TourService.createTour - Sending to POST /api/tours:', completeData);
     const response = await axios.post(`${API_BASE_URL}/tours`, completeData, {
@@ -301,7 +300,7 @@ class TourService {
   // Tạo tour mới cho admin (bắt buộc có agency_id)
   static async createAdminTour(tourData) {
     const completeData = {
-      agency_id: tourData.agency_id, // BẮT BUỘC
+      agency_id: tourData.agency_id,
       name: tourData.name,
       description: tourData.description || '',
       location: tourData.location || '',
@@ -313,9 +312,11 @@ class TourService {
       min_participants: parseInt(tourData.min_participants) || 1,
       images: tourData.images || [],
       departureDates: tourData.departureDates || [],
-      selectedIncludedServices: tourData.selectedIncludedServices || tourData.included_service_ids || [],
-      selectedCategories: tourData.selectedCategories || tourData.category_ids || [],
-      hotel_ids: tourData.selectedHotels || tourData.hotel_ids || [],
+      included_service_ids: tourData.included_service_ids || [],
+      excluded_service_ids: tourData.excluded_service_ids || [],
+      category_ids: tourData.category_ids || [],
+      hotel_ids: tourData.hotel_ids || [],
+      status: tourData.status, // status chuẩn hóa từ FE
     };
     console.log('🚀 TourService.createAdminTour - Sending to POST /api/tours:', completeData);
     const response = await axios.post(`${API_BASE_URL}/tours`, completeData, {
@@ -328,6 +329,37 @@ class TourService {
   static async updateTour(tourId, tourData, options = {}) {
     console.log('🔄 TourService.updateTour called with:', { tourId, tourData, options });
     const { selective = false } = options;
+
+    // 1. Kiểm tra booking xác nhận ở bất kỳ ngày khởi hành nào
+    let hasConfirmedBooking = false;
+    try {
+      const departuresRes = await axios.get(`${API_BASE_URL}/tours/${tourId}/departures`, {
+        headers: this.getAuthHeaders()
+      });
+      const departures = departuresRes.data.departureDates || [];
+      for (const dep of departures) {
+        // Nếu có trường bookings thì kiểm tra ở đây
+        if (dep.status === 'confirmed') {
+          hasConfirmedBooking = true;
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('❌ Failed to check departures:', error);
+      throw error;
+    }
+
+    // 2. Nếu có booking đã xác nhận, không cho phép cập nhật một số trường
+    if (hasConfirmedBooking) {
+      const forbiddenFields = ['departureDates', 'status', 'max_participants', 'min_participants'];
+      for (const field of forbiddenFields) {
+        if (tourData[field] !== undefined) {
+          delete tourData[field];
+          NotificationService.warning(`Không thể cập nhật trường ${field} vì tour đã có booking xác nhận.`);
+        }
+      }
+    }
+
     let updateData;
     if (selective) {
       // Selective update - chỉ gửi các field được provide
@@ -353,6 +385,7 @@ class TourService {
     } else {
       // Full update - gửi tất cả fields như BE yêu cầu
       updateData = {
+        //agency_id: tourData.agency_id,
         name: tourData.name,
         description: tourData.description || '',
         location: tourData.location || '',
@@ -363,10 +396,11 @@ class TourService {
         max_participants: parseInt(tourData.max_participants) || 1,
         min_participants: parseInt(tourData.min_participants) || 1,
         images: tourData.images || [],
-        departureDates: tourData.departureDates || [],
-        selectedIncludedServices: tourData.selectedIncludedServices || tourData.included_service_ids || [],
-        selectedCategories: tourData.selectedCategories || tourData.category_ids || [],
-        hotel_ids: tourData.selectedHotels || tourData.hotel_ids || [],
+        //departureDates: tourData.departureDates || [],
+        included_service_ids: tourData.included_service_ids || [],
+        excluded_service_ids: tourData.excluded_service_ids || [],
+        category_ids: tourData.category_ids || [],
+        hotel_ids: tourData.hotel_ids || [],
       };
       console.log('📋 Full update data:', updateData);
     }
@@ -388,7 +422,15 @@ class TourService {
       throw error;
     }
   }
-
+// Agency gửi duyệt tour (chuyển từ draft sang Chờ duyệt)
+  static async submitForApproval(tourId) {
+    const response = await axios.patch(
+      `${API_BASE_URL}/tours/${tourId}/submit-for-approval`,
+      {},
+      { headers: this.getAuthHeaders() }
+    );
+    return response.data;
+  }
   // Xóa tour
   static async deleteTour(tourId) {
     const response = await axios.delete(`${API_BASE_URL}/tours/${tourId}`, {
@@ -405,9 +447,9 @@ class TourService {
   static async updateTourLocation(tourId, locationId) {
     try {
       console.log(`📍 Updating location for tour ${tourId} to location ${locationId}`);
-      return await this.updateTour(tourId, { location_id: locationId }, { 
-        selective: true, 
-        suppressAlert: true 
+      return await this.updateTour(tourId, { location_id: locationId }, {
+        selective: true,
+        suppressAlert: true
       });
     } catch (error) {
       console.error('❌ updateTourLocation error:', error);
@@ -419,9 +461,9 @@ class TourService {
   static async updateTourBasicInfo(tourId, updateData) {
     try {
       console.log(`📝 Updating basic info for tour ${tourId}:`, updateData);
-      return await this.updateTour(tourId, updateData, { 
-        selective: true, 
-        suppressAlert: true 
+      return await this.updateTour(tourId, updateData, {
+        selective: true,
+        suppressAlert: true
       });
     } catch (error) {
       console.error('❌ updateTourBasicInfo error:', error);
@@ -433,9 +475,9 @@ class TourService {
   static async updateTourPrice(tourId, price) {
     try {
       console.log(`💰 Updating price for tour ${tourId} to ${price}`);
-      return await this.updateTour(tourId, { price: parseFloat(price) }, { 
-        selective: true, 
-        suppressAlert: true 
+      return await this.updateTour(tourId, { price: parseFloat(price) }, {
+        selective: true,
+        suppressAlert: true
       });
     } catch (error) {
       console.error('❌ updateTourPrice error:', error);
@@ -447,9 +489,9 @@ class TourService {
   static async updateTourDestination(tourId, destination) {
     try {
       console.log(`🎯 Updating destination for tour ${tourId} to ${destination}`);
-      return await this.updateTour(tourId, { destination: destination }, { 
-        selective: true, 
-        suppressAlert: true 
+      return await this.updateTour(tourId, { destination: destination }, {
+        selective: true,
+        suppressAlert: true
       });
     } catch (error) {
       console.error('❌ updateTourDestination error:', error);
@@ -461,9 +503,9 @@ class TourService {
   static async updateTourDepartureDates(tourId, departureDates) {
     try {
       console.log(`📅 Updating departure dates for tour ${tourId}:`, departureDates);
-      return await this.updateTour(tourId, { departureDates: departureDates }, { 
-        selective: true, 
-        suppressAlert: true 
+      return await this.updateTour(tourId, { departureDates: departureDates }, {
+        selective: true,
+        suppressAlert: true
       });
     } catch (error) {
       console.error('❌ updateTourDepartureDates error:', error);
@@ -473,8 +515,8 @@ class TourService {
 
   // Cập nhật status tour
   static async updateTourStatus(tourId, status) {
-    const response = await axios.patch(`${API_BASE_URL}/tours/${tourId}/status`, 
-      { status }, 
+    const response = await axios.patch(`${API_BASE_URL}/tours/${tourId}/status`,
+      { status },
       { headers: this.getAuthHeaders() }
     );
     return response.data;
@@ -552,7 +594,7 @@ class TourService {
 
       // Lấy relationships hiện tại
       const currentTour = await this.getTourComplete(tourId);
-      
+
       const currentCategories = currentTour.categories?.map(c => c.id || c.category_id) || [];
       const currentIncludedServices = currentTour.included_services?.map(s => s.id || s.included_service_id) || [];
       const currentExcludedServices = currentTour.excluded_services?.map(s => s.id || s.excluded_service_id) || [];
@@ -596,7 +638,7 @@ class TourService {
         ...includedServicesToAdd.map(id => this.assignIncludedService(tourId, id)),
         ...excludedServicesToAdd.map(id => this.assignExcludedService(tourId, id)),
         ...hotelsToAdd.map(id => this.assignHotel(tourId, id)),
-        
+
         // Xóa bỏ
         ...categoriesToRemove.map(id => this.removeCategory(tourId, id)),
         ...includedServicesToRemove.map(id => this.removeIncludedService(tourId, id)),
@@ -606,13 +648,13 @@ class TourService {
 
       console.log(`🔧 Executing ${operations.length} relationship operations...`);
       const results = await Promise.allSettled(operations);
-      
+
       // Debug kết quả
       const failed = results.filter(r => r.status === 'rejected');
       if (failed.length > 0) {
         console.error('❌ Some relationship operations failed:', failed);
       }
-      
+
       console.log('✅ Tour relationships updated successfully');
       return true;
     } catch (error) {

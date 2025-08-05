@@ -2,34 +2,11 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Plus, Search, MoreHorizontal, Edit, Trash, Check, ChevronDown, Upload, XCircle, Eye } from "lucide-react";
 import Pagination from '../../components/Pagination';
 import TourService from '../../../services/TourService';
-import axios from 'axios'; // Import axios
+import { uploadToCloudinary } from '../../../utils/cloudinary';
 
-// Function upload ảnh lên Cloudinary
-const uploadToCloudinary = async (file) => {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('upload_preset', 'ml_default'); // Thay bằng upload preset của bạn
-  
-  try {
-    const response = await fetch('https://api.cloudinary.com/v1_1/your-cloud-name/image/upload', {
-      method: 'POST',
-      body: formData,
-    });
-    
-    if (!response.ok) {
-      throw new Error('Upload failed');
-    }
-    
-    const data = await response.json();
-    return {
-      url: data.secure_url,
-      public_id: data.public_id
-    };
-  } catch (error) {
-    console.error('Error uploading to Cloudinary:', error);
-    throw new Error('Không thể upload ảnh lên Cloudinary');
-  }
-};
+// Cloudinary config giống bên TourPage (admin)
+const CLOUDINARY_URL = 'https://api.cloudinary.com/v1_1/dilysnt/image/upload';
+const UPLOAD_PRESET = 'unsigned';
 
 const ToursPageManagement = () => {
   // State giống admin
@@ -58,6 +35,7 @@ const ToursPageManagement = () => {
     selectedIncludedServices: [],
     selectedExcludedServices: [],
     departure_date_id: "",
+    tour_type: "", // Thêm trường tour_type
   });
   const [categories, setCategories] = useState([]);
   const [hotels, setHotels] = useState([]);
@@ -76,6 +54,13 @@ const ToursPageManagement = () => {
   const [destinations, setDestinations] = useState([]);
   const [dropdownOpenId, setDropdownOpenId] = useState(null);
   const [selectedLocationId, setSelectedLocationId] = useState("");
+  const [newDepartureDates, setNewDepartureDates] = useState(['']);
+  const [pendingSave, setPendingSave] = useState(false);
+  const userRole = localStorage.getItem('user_role') || 'agency'; // 'admin' hoặc 'agency'
+
+  // Thêm state Toast ở đầu component
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
 
   // Fetch options data (categories, hotels, services, destinations, departure dates) chỉ chạy 1 lần khi mount
   useEffect(() => {
@@ -95,7 +80,7 @@ const ToursPageManagement = () => {
         setCategories(cat);
         setDestinations(dest);
         setDepartureDates(dep);
-      } catch {}
+      } catch { }
     };
     fetchOptions();
   }, []);
@@ -147,18 +132,28 @@ const ToursPageManagement = () => {
   const handleImageUpload = async (e) => {
     const files = Array.from(e.target.files);
     setIsUploading(true);
-    try {
-      const newImages = [];
-      for (const file of files) {
-        const previewUrl = URL.createObjectURL(file);
-        newImages.push({ file, image_url: previewUrl, is_main: false, id: Date.now() + Math.random().toString(36).substring(2, 9) });
+    for (const file of files) {
+      // ...upload lên Cloudinary...
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", "ml_default");
+      const res = await fetch(`https://api.cloudinary.com/v1_1/dojbjbbjw/image/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.secure_url) {
+        setImages(prev => [
+          ...prev,
+          {
+            id: Date.now() + Math.random(), // hoặc data.asset_id
+            image_url: data.secure_url,
+            is_main: prev.length === 0, // ảnh đầu tiên là chính
+          }
+        ]);
       }
-      setImages(prev => [...prev, ...newImages]);
-    } catch (error) {
-      alert('Có lỗi khi xử lý ảnh. Vui lòng thử lại.');
-    } finally {
-      setIsUploading(false);
     }
+    setIsUploading(false);
   };
   const handleRemoveImage = (id) => setImages(images.filter(img => img.id !== id));
   const handleSetMainImage = (id) => setImages(images.map(img => ({ ...img, is_main: img.id === id })));
@@ -184,37 +179,54 @@ const ToursPageManagement = () => {
       selectedIncludedServices: [],
       selectedExcludedServices: [],
       departure_date_id: "",
+      tour_type: "", // Thêm trường tour_type
     });
     setImages([]);
     setCurrentStep(1);
     setSelectedLocationId('');
     setSelectedDestinations([]);
+    setNewDepartureDates(['']); // Reset ngày khởi hành
     setIsModalOpen(true);
   };
   const handleEditTour = async (tour) => {
     setEditingTour(tour);
     setLoading(true);
     try {
-      // 1. Lấy thông tin tổng hợp tour
-      const [complete, departures, categories, includedServices, hotels, itineraries] = await Promise.all([
-        fetch(`http://localhost:5000/api/tours/${tour.id}/complete`).then(r => r.json()),
-        fetch(`http://localhost:5000/api/tours/${tour.id}/departures`).then(r => r.json()),
-        fetch(`http://localhost:5000/api/tours/${tour.id}/categories`).then(r => r.json()),
-        fetch(`http://localhost:5000/api/tours/${tour.id}/included-services`).then(r => r.json()),
-        fetch(`http://localhost:5000/api/tours/${tour.id}/hotels`).then(r => r.json()),
-        fetch(`http://localhost:5000/api/tours/${tour.id}/itineraries`).then(r => r.json()),
-      ]);
+      // Chỉ cần gọi /complete, vì đã trả về đủ thông tin
+      const complete = await fetch(`http://localhost:5000/api/tours/${tour.id}/complete`).then(r => r.json());
+      // Kiểm tra booking xác nhận trong departureDates
+      let hasConfirmedBooking = false;
+      if (Array.isArray(complete.departureDates)) {
+        for (const dep of complete.departureDates) {
+          if (Array.isArray(dep.bookings) && dep.bookings.some(b => b.status === 'confirmed')) {
+            hasConfirmedBooking = true;
+            break;
+          }
+        }
+      }
       setNewTour({
-        ...complete,
-        selectedCategories: Array.isArray(categories) ? categories.map(c => c.id || c.category_id) : [],
-        selectedHotels: Array.isArray(hotels) ? hotels.map(h => h.id || h.hotel_id) : [],
-        selectedIncludedServices: Array.isArray(includedServices) ? includedServices.map(s => s.id || s.included_service_id) : [],
-        selectedExcludedServices: Array.isArray(complete.excluded_services) ? complete.excluded_services.map(s => s.id || s.excluded_service_id) : [],
-        selectedDestinations: Array.isArray(complete.destinations) ? complete.destinations.map(d => d.id) : [],
+        id: complete.id,
+        agency_id: complete.agency_id,
+        name: complete.name || "",
+        description: complete.description || "",
+        destination_id: complete.destination_id || "",
+        location_id: complete.location_id || "",
+        departure_location: complete.departure_location || "",
         price: complete.price || 0,
+        max_participants: complete.max_participants || 10,
+        min_participants: complete.min_participants || 1,
+        tour_type: complete.tour_type || "",
+        included_service_ids: tourData.included_service_ids || [],
+        excluded_service_ids: tourData.excluded_service_ids || [],
+        category_ids: tourData.category_ids || [],
+        hotel_ids: tourData.hotel_ids || [],
+        selectedDestinations: Array.isArray(complete.destinations) ? complete.destinations.map(d => d.id) : [],
+        images: complete.images || [],
+        departureDates: complete.departureDates || [],
+        hasConfirmedBooking,
       });
       setImages(complete.images || []);
-      setSelectedLocationId(complete.location_id); // <-- Thêm dòng này
+      setSelectedLocationId(complete.location_id || "");
       setSelectedDestinations(Array.isArray(complete.destinations) ? complete.destinations.map(d => d.id) : []);
       setCurrentStep(1);
       setIsModalOpen(true);
@@ -224,59 +236,162 @@ const ToursPageManagement = () => {
       setLoading(false);
     }
   };
-  const closeModal = () => { 
-    setIsModalOpen(false); 
-    setEditingTour(null); 
-    setCurrentStep(1); 
-    setImages([]); 
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setEditingTour(null);
+    setCurrentStep(1);
+    setImages([]);
     setSelectedLocationId('');
     setSelectedDestinations([]);
+    setNewDepartureDates(['']); // Reset ngày khởi hành
   };
 
   // Save tour (add/edit)
   const handleSaveTour = async () => {
-      // Validate
-      if (!newTour.name || !newTour.price) {
-      alert("Vui lòng nhập đầy đủ tên tour và giá!");
-        return;
-      }
+    // Nếu là admin tạo mới và newDepartureDates là mảng string, chuyển thành object rồi submit lại
+    if (userRole === 'admin' && !editingTour && Array.isArray(newDepartureDates) && typeof newDepartureDates[0] === 'string') {
+      setNewDepartureDates(newDepartureDates.map(date => ({ departure_date: date })));
+      setPendingSave(true);
+      return;
+    }
+
+    // Kiểm tra các trường bắt buộc
+    const missingFields = [];
+    if (!newTour.name) missingFields.push("Tên tour");
+    if (!newTour.departure_location) missingFields.push("Điểm khởi hành");
+    if (!newTour.destination_id) missingFields.push("Điểm đến");
+    if (!newTour.tour_type) missingFields.push("Loại tour");
+    if (images.length === 0) missingFields.push("Hình ảnh tour");
+    if (userRole === 'admin' && (!newTour.agency_id || typeof newTour.agency_id !== 'string' || newTour.agency_id.trim() === '')) missingFields.push("Agency");
+
+    // Kiểm tra ngày khởi hành hợp lệ chỉ với admin tạo mới
+    let validDepartureDates = [];
+    if (userRole === 'admin' && !editingTour) {
+      validDepartureDates = newDepartureDates.filter(d => d && d.departure_date);
+      if (validDepartureDates.length === 0) missingFields.push("Ngày khởi hành hợp lệ");
+    }
+
+    if (missingFields.length > 0) {
+      alert("Vui lòng điền đầy đủ thông tin bắt buộc:\n" + missingFields.join(", "));
+      return;
+    }
+
+    // Chuẩn bị dữ liệu gửi lên BE
+    const selectedLocation = locations.find(loc => loc.id === selectedLocationId);
+    const locationName = selectedLocation ? selectedLocation.name : "";
+    // Đảm bảo lấy đúng selectedDestinations và selectedHotels khi sửa hoặc tạo tour
+    let selectedDestinationIds = [];
+    let selectedHotelIds = [];
+    if (Array.isArray(newTour.selectedDestinations) && newTour.selectedDestinations.length > 0) {
+      selectedDestinationIds = newTour.selectedDestinations;
+    } else if (Array.isArray(selectedDestinations) && selectedDestinations.length > 0) {
+      selectedDestinationIds = selectedDestinations;
+    }
+    if (Array.isArray(newTour.selectedHotels) && newTour.selectedHotels.length > 0) {
+      selectedHotelIds = newTour.selectedHotels;
+    } else if (Array.isArray(hotelsByLocation) && hotelsByLocation.length > 0) {
+      selectedHotelIds = hotelsByLocation.map(h => String(h.id_hotel || h.id));
+    }
+    const selectedDestinationNames = destinations
+      .filter(dest => selectedDestinationIds.includes(dest.id))
+      .map(dest => dest.name);
+    const destinationString = selectedDestinationNames.join(', ');
+
+
+    // Đảm bảo lấy đúng hotel_ids từ selectedHotels hoặc hotelsByLocation
+    let hotelIds = [];
+    if (Array.isArray(newTour.selectedHotels) && newTour.selectedHotels.length > 0) {
+      hotelIds = newTour.selectedHotels;
+    } else if (Array.isArray(hotelsByLocation) && hotelsByLocation.length > 0) {
+      hotelIds = hotelsByLocation.map(h => String(h.id_hotel || h.id));
+    }
+
+    const body = {
+      // Chỉ lấy các trường backend cần, KHÔNG spread ...newTour
+      name: newTour.name,
+      description: newTour.description,
+      location: locationName,
+      destination: destinationString,
+      departure_location: newTour.departure_location,
+      duration_days: newTour.duration_days,
+      duration_nights: newTour.duration_nights,
+      price: newTour.price,
+      max_participants: newTour.max_participants,
+      min_participants: newTour.min_participants,
+      tour_type: newTour.tour_type,
+      images: images.map(img => ({ image_url: img.image_url, is_main: img.is_main })),
+      included_service_ids: newTour.selectedIncludedServices || [],
+      category_ids: newTour.selectedCategories || [],
+      hotel_ids: hotelIds,
+      excluded_service_ids: Array.isArray(newTour.selectedExcludedServices) ? newTour.selectedExcludedServices : [],
+      agency_id: userRole === 'admin' ? String(newTour.agency_id) : newTour.agency_id || localStorage.getItem('agency_id') || '1',
+      departureDates: newTour.departure_date_ids || [],
+    };
+    if (editingTour) {
+      body.status = typeof newTour.status === 'string' ? newTour.status : 'Chờ duyệt';
+    }
+
+    // DEBUG: In ra payload trước khi gửi để kiểm tra
+    console.log('Payload gửi lên BE:', body);
+
     try {
-      let tourId;
+      let newTourData;
       if (editingTour) {
-        // Sửa tour
-        await TourService.updateTour(editingTour.id, newTour);
-        tourId = editingTour.id;
+        if (userRole === 'admin') {
+          newTourData = await TourService.updateAdminTour(editingTour.id, body);
+        } else {
+          newTourData = await TourService.updateTour(editingTour.id, body);
+        }
       } else {
-        // Thêm tour mới
-        const created = await TourService.createTour(newTour);
-        tourId = created.id;
+        if (userRole === 'admin') {
+          newTourData = await TourService.createAdminTour(body);
+        } else {
+          newTourData = await TourService.createTour(body);
+        }
       }
-      // Chỉ upload ảnh mới (có file, chưa có public_id)
-      const uploadPromises = images.filter(img => img.file && !img.public_id).map(async (image) => {
-        const cloudinaryResult = await uploadToCloudinary(image.file);
-        return {
-          ...image,
-          url: cloudinaryResult.url,
-          public_id: cloudinaryResult.public_id
-        };
+
+      // Refresh tour list
+      if (userRole === 'admin') {
+        await fetchAdminTours(pagination.page, pagination.limit, filters);
+      } else {
+        await fetchTours();
+      }
+
+      // Thay alert bằng Toast
+      setToastMessage(editingTour ? "Cập nhật tour thành công!" : "Tạo tour thành công!");
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+
+      // Reset form
+      setIsModalOpen(false);
+      setCurrentStep(1);
+      setImages([]);
+      setSelectedLocationId('');
+      setEditingTour(null);
+      setNewTour({
+        id: (Array.isArray(tours) ? tours.length : 0) + 1,
+        agency_id: "1",
+        name: "",
+        description: "",
+        destination_id: "",
+        duration_days: 1,
+        duration_nights: 0,
+        departure_location: "",
+        price: 0,
+        max_participants: 10,
+        min_participants: 1,
+        status: "draft",
+        selectedCategories: [],
+        selectedHotels: [],
+        selectedIncludedServices: [],
+        selectedExcludedServices: [],
+        departure_date_ids: [],
+        tour_type: '',
+        selectedDestinations: [],
       });
-      const uploadedImages = await Promise.all(uploadPromises);
-      const savePromises = uploadedImages.map(image => {
-        const payload = {
-          tour_id: tourId,
-          image_url: image.url,
-          public_id: image.public_id,
-          is_main: image.is_main,
-          width: image.width,
-          height: image.height
-        };
-        return axios.post('http://localhost:5000/api/tour-images', payload);
-      });
-      await Promise.all(savePromises);
-      closeModal();
-      fetchTours();
-    } catch (err) {
-      alert("Có lỗi xảy ra khi lưu tour!");
+    } catch (error) {
+      console.error('🔍 DEBUG: Error saving tour:', error);
+      alert(error.message || "Có lỗi khi tạo/cập nhật tour!");
     }
   };
 
@@ -297,7 +412,7 @@ const ToursPageManagement = () => {
   const handleSendForApproval = async (id) => {
     setLoading(true);
     try {
-      await TourService.updateTourStatus(id, "Chờ duyệt");
+      await TourService.submitForApproval(id);
       fetchTours();
     } catch (err) {
       alert("Gửi duyệt thất bại!");
@@ -327,6 +442,11 @@ const ToursPageManagement = () => {
 
   return (
     <div className="p-6 flex flex-col gap-6">
+      {showToast && (
+        <div style={{position: 'fixed', bottom: 32, right: 32, zIndex: 9999}} className="bg-green-600 text-white px-6 py-3 rounded shadow-lg animate-fade-in">
+          {toastMessage}
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-slate-900">Quản lý Tour</h1>
         <button
@@ -396,7 +516,7 @@ const ToursPageManagement = () => {
                   <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700">
                     {tour.images && tour.images.length > 0 ? (
                       <div className="w-16 h-16 rounded-md overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
-                           onClick={() => setShowImageGallery(true)}>
+                        onClick={() => setShowImageGallery(true)}>
                         <img
                           src={tour.images.find(img => img.is_main)?.image_url || tour.images[0].image_url}
                           alt={tour.name}
@@ -431,15 +551,15 @@ const ToursPageManagement = () => {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700 relative">
-                      <button
+                    <button
                       aria-haspopup="true"
                       aria-expanded={dropdownOpenId === tour.id}
-                        onClick={() => toggleDropdown(tour.id)}
+                      onClick={() => toggleDropdown(tour.id)}
                       className="inline-flex items-center rounded-md p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        <MoreHorizontal size={20} />
-                      </button>
-                      {dropdownOpenId === tour.id && (
+                    >
+                      <MoreHorizontal size={20} />
+                    </button>
+                    {dropdownOpenId === tour.id && (
                       <ul
                         role="menu"
                         aria-label="Hành động"
@@ -468,7 +588,35 @@ const ToursPageManagement = () => {
                           <li>
                             <button
                               role="menuitem"
-                              onClick={() => handleSendForApproval(tour.id)}
+                              onClick={async () => {
+                                // Kiểm tra thiếu ngày khởi hành hoặc hành trình
+                                const missingFields = [];
+                                // departureDates: mảng ngày khởi hành
+                                if (!tour.departureDates || !Array.isArray(tour.departureDates) || tour.departureDates.length === 0) {
+                                  missingFields.push('Ngày khởi hành');
+                                }
+                                // itinerary: trường mô tả hành trình, có thể là tour.itinerary hoặc tour.description
+                                if (!tour.itinerary && !tour.description) {
+                                  missingFields.push('Hành trình');
+                                }
+                                if (missingFields.length > 0) {
+                                  setToastMessage('Vui lòng bổ sung: ' + missingFields.join(', '));
+                                  setShowToast(true);
+                                  setTimeout(() => setShowToast(false), 3000);
+                                  return;
+                                }
+                                try {
+                                  await TourService.submitForApproval(tour.id);
+                                  fetchTours();
+                                  setToastMessage('Đã gửi duyệt tour!');
+                                  setShowToast(true);
+                                  setTimeout(() => setShowToast(false), 3000);
+                                } catch (err) {
+                                  setToastMessage('Gửi duyệt thất bại!');
+                                  setShowToast(true);
+                                  setTimeout(() => setShowToast(false), 3000);
+                                }
+                              }}
                               className="block w-full px-4 py-2 text-left text-sm text-green-600 hover:bg-slate-100 flex items-center"
                             >
                               <Check size={16} className="mr-2" /> Gửi duyệt
@@ -476,7 +624,7 @@ const ToursPageManagement = () => {
                           </li>
                         )}
                       </ul>
-                      )}
+                    )}
                   </td>
                 </tr>
               ))
@@ -498,262 +646,435 @@ const ToursPageManagement = () => {
       </div>
       {/* Modal multi-step giữ nguyên như cũ */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-4xl max-h-[95vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-4 text-slate-900">
-              {editingTour ? "Sửa Tour" : "Thêm Tour"}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-4xl h-[90vh] shadow-2xl flex flex-col">
+            <h2 className="text-2xl font-semibold text-gray-900 mb-6 text-center">
+              {editingTour ? "Sửa Tour" : "Tạo Tour mới"} - Bước {currentStep}
             </h2>
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-slate-700">Bước {currentStep} / 2</span>
-                <div className="h-1 bg-slate-200 w-16 rounded-full">
-                  <div
-                    className="h-full bg-blue-600 rounded-full"
-                    style={{ width: `${(currentStep - 1) * 100}%` }}
-                  ></div>
-                </div>
-              </div>
-              <button
-                onClick={closeModal}
-                className="text-slate-500 hover:text-slate-700"
-              >
-                <XCircle size={24} />
-              </button>
-            </div>
-
-            {currentStep === 1 && (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Tên Tour</label>
-                    <input type="text" value={newTour.name} onChange={e => setNewTour({ ...newTour, name: e.target.value })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Mô tả</label>
-                    <textarea value={newTour.description} onChange={e => setNewTour({ ...newTour, description: e.target.value })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" rows={2} />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Điểm đến</label>
-                    <select
-                      value={selectedLocationId}
-                      onChange={e => {
-                        setSelectedLocationId(e.target.value);
-                        setNewTour(prev => ({ ...prev, destination_id: e.target.value, location_id: e.target.value }));
-                        setSelectedDestinations([]); // reset khi đổi location
-                      }}
-                      className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    >
-                      <option value="">-- Chọn điểm đến --</option>
-                      {locations.map(loc => (
-                        <option key={loc.id} value={loc.id}>{loc.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Số ngày</label>
-                    <input type="number" value={newTour.duration_days} onChange={e => setNewTour({ ...newTour, duration_days: parseInt(e.target.value) || 1 })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Số đêm</label>
-                    <input type="number" value={newTour.duration_nights} onChange={e => setNewTour({ ...newTour, duration_nights: parseInt(e.target.value) || 0 })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Điểm khởi hành</label>
-                    <input type="text" value={newTour.departure_location} onChange={e => setNewTour({ ...newTour, departure_location: e.target.value })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Giá</label>
-                    <input type="number" value={newTour.price} onChange={e => setNewTour({ ...newTour, price: parseFloat(e.target.value) || 0 })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Số lượng tối đa</label>
-                    <input type="number" value={newTour.max_participants} onChange={e => setNewTour({ ...newTour, max_participants: parseInt(e.target.value) || 1 })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Số lượng tối thiểu</label>
-                    <input type="number" value={newTour.min_participants} onChange={e => setNewTour({ ...newTour, min_participants: parseInt(e.target.value) || 1 })} className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Hình ảnh Tour</label>
-                    <div className="flex items-center gap-2">
-                      {images.length > 0 && (
-                        <div className="flex items-center gap-2 flex-wrap mt-2">
-                          {[...images].sort((a, b) => (b.is_main ? 1 : 0) - (a.is_main ? 1 : 0)).map((img, idx) => (
-                            <div key={img.id} className="relative w-20 h-20 rounded-md overflow-hidden border border-gray-200 flex flex-col items-center justify-center">
-                              <img src={img.image_url} alt={img.file?.name || 'Ảnh tour'} className="w-full h-full object-cover" />
+            <div className="flex-grow overflow-y-auto pr-4">
+              <div>
+                {currentStep === 1 && (
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">Loại tour</label>
+                      <select
+                        value={newTour.tour_type || ''}
+                        onChange={e => setNewTour({ ...newTour, tour_type: e.target.value })}
+                        required
+                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                      >
+                        <option value="">-- Chọn loại tour --</option>
+                        <option value="Trong nước">Trong nước</option>
+                        <option value="Nước ngoài">Nước ngoài</option>
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">Tên Tour</label>
+                        <input
+                          type="text"
+                          value={newTour.name}
+                          onChange={e => setNewTour({ ...newTour, name: e.target.value })}
+                          required
+                          disabled={newTour.hasConfirmedBooking}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">Mô tả</label>
+                        <textarea
+                          value={newTour.description}
+                          onChange={e => setNewTour({ ...newTour, description: e.target.value })}
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Điểm đến</label>
+                        <select
+                          value={selectedLocationId}
+                          onChange={e => {
+                            setSelectedLocationId(e.target.value);
+                            setNewTour(prev => ({ ...prev, destination_id: e.target.value, location_id: e.target.value }));
+                          }}
+                          required
+                          className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="">-- Chọn điểm đến --</option>
+                          {locations.map(loc => (
+                            <option key={loc.id} value={loc.id}>{loc.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {/* <div>
+                        <label className="block text-sm font-medium text-gray-700">Số ngày</label>
+                        <input
+                          type="number"
+                          value={newTour.duration_days}
+                          onChange={e => setNewTour({ ...newTour, duration_days: parseInt(e.target.value) || 1 })}
+                          required
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div> */}
+                      {/* <div>
+                        <label className="block text-sm font-medium text-gray-700">Số đêm</label>
+                        <input
+                          type="number"
+                          value={newTour.duration_nights}
+                          onChange={e => setNewTour({ ...newTour, duration_nights: parseInt(e.target.value) || 0 })}
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div> */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">Điểm khởi hành</label>
+                        <input
+                          type="text"
+                          value={newTour.departure_location}
+                          onChange={e => setNewTour({ ...newTour, departure_location: e.target.value })}
+                          required
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">Giá</label>
+                        <input
+                          type="number"
+                          value={newTour.price}
+                          onChange={e => setNewTour({ ...newTour, price: parseFloat(e.target.value) || 0 })}
+                          required
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">Số lượng tối đa</label>
+                        <input
+                          type="number"
+                          value={newTour.max_participants}
+                          onChange={e => setNewTour({ ...newTour, max_participants: parseInt(e.target.value) || 1 })}
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">Số lượng tối thiểu</label>
+                        <input
+                          type="number"
+                          value={newTour.min_participants}
+                          onChange={e => setNewTour({ ...newTour, min_participants: parseInt(e.target.value) || 1 })}
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Hình ảnh Tour</label>
+                      <div className="mt-1 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-gray-300 px-6 pt-5 pb-6">
+                        <div className="flex flex-col items-center">
+                          <Upload className="mx-auto h-12 w-12 text-gray-400" />
+                          <div className="mt-1 text-sm text-gray-600">
+                            <label
+                              htmlFor="file-upload"
+                              className="relative cursor-pointer rounded-md bg-white font-medium text-indigo-600 focus-within:outline-none hover:text-indigo-500"
+                            >
+                              <span>Upload ảnh</span>
+                              <input
+                                id="file-upload"
+                                name="file-upload"
+                                type="file"
+                                multiple
+                                className="sr-only"
+                                onChange={handleImageUpload}
+                                accept="image/*"
+                                ref={fileInputRef}
+                              />
+                            </label>
+                            <span className="pl-1">hoặc kéo thả vào đây</span>
+                          </div>
+                          <p className="text-xs text-gray-500">PNG, JPG, GIF tối đa 10MB</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                        {images.map((image) => (
+                          <div key={image.id} className="relative group">
+                            <div className="aspect-w-1 aspect-h-1 w-full overflow-hidden rounded-md bg-gray-200">
+                              <img
+                                src={image.image_url}
+                                alt="Preview"
+                                className="h-full w-full object-cover object-center"
+                              />
+                            </div>
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 flex items-center justify-center">
                               <button
-                                onClick={() => handleSetMainImage(img.id)}
-                                className={`absolute bottom-1 left-1 right-1 px-2 py-1 text-xs rounded-full ${img.is_main ? 'bg-blue-600 text-white font-bold' : 'bg-white text-gray-700 border border-gray-300'}`}
+                                type="button"
+                                onClick={() => handleRemoveImage(image.id)}
+                                className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100"
                               >
-                                {img.is_main ? 'Ảnh chính' : 'Đặt làm ảnh chính'}
+                                <XCircle size={16} />
                               </button>
                               <button
-                                onClick={() => handleRemoveImage(img.id)}
-                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
-                                title="Xóa ảnh"
+                                type="button"
+                                onClick={() => handleSetMainImage(image.id)}
+                                className={`px-2 py-1 text-xs rounded-full ${image.is_main ? 'bg-green-600 text-white' : 'bg-white text-gray-800 opacity-0 group-hover:opacity-100'}`}
                               >
-                                <Trash size={12} />
+                                {image.is_main ? 'Ảnh chính' : 'Đặt làm ảnh chính'}
                               </button>
                             </div>
-                          ))}
+                          </div>
+                        ))}
+                      </div>
+                      {isUploading && (
+                        <div className="mt-2 text-sm text-gray-500">
+                          Đang upload ảnh, vui lòng chờ...
                         </div>
                       )}
-                      <label htmlFor="imageUpload" className="inline-flex items-center px-3 py-2 rounded-md border border-slate-300 text-sm text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        <Upload size={16} className="mr-2" /> Chọn ảnh
-                        <input
-                          type="file"
-                          id="imageUpload"
-                          multiple
-                          accept="image/*"
-                          onChange={handleImageUpload}
-                          className="hidden"
-                        />
-                      </label>
                     </div>
                   </div>
-                </div>
-                <div className="flex justify-end mt-6 gap-2">
-                  <button
-                    onClick={closeModal}
-                    className="inline-flex items-center rounded-md bg-slate-200 px-4 py-2 text-slate-700 hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-500"
-                  >
-                    Hủy
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (!newTour.name || !newTour.description || !selectedLocationId || !newTour.duration_days || !newTour.duration_nights || !newTour.departure_location || !newTour.price || !newTour.max_participants || !newTour.min_participants || images.length === 0) {
-                        alert('Vui lòng nhập đầy đủ thông tin và upload ít nhất 1 ảnh!');
-                        return;
-                      }
-                      setCurrentStep(2);
-                    }}
-                    className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    Tiếp theo
-                  </button>
-                </div>
-              </>
-            )}
+                )}
+                {/* ...bước 2 giữ nguyên như cũ... */}
+                {currentStep === 2 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Danh mục Tour */}
+                    <div className="bg-slate-50 rounded-lg p-4 shadow-sm">
+                      <label className="block text-base font-semibold text-blue-700 mb-2">Danh mục Tour</label>
+                      <button
+                        type="button"
+                        className="mb-2 px-2 py-1 text-xs rounded bg-blue-100 text-blue-700 hover:bg-blue-200"
+                        onClick={() => setNewTour(prev => ({
+                          ...prev,
+                          selectedCategories: categories.map(c => c.id)
+                        }))}
+                      >
+                        Chọn tất cả
+                      </button>
+                      <div className="flex flex-wrap gap-3">
+                        {categories.map(category => (
+                          <label key={category.id} className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                            <input
+                              type="checkbox"
+                              value={category.id}
+                              checked={Array.isArray(newTour.selectedCategories) && newTour.selectedCategories.includes(category.id)}
+                              onChange={e => {
+                                const checked = e.target.checked;
+                                setNewTour(prev => ({
+                                  ...prev,
+                                  selectedCategories: checked
+                                    ? [...prev.selectedCategories, category.id]
+                                    : prev.selectedCategories.filter(id => id !== category.id)
+                                }));
+                              }}
+                              className="accent-blue-600 w-4 h-4 rounded"
+                              disabled={newTour.hasConfirmedBooking}
+                            />
+                            <span>{category.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Khách sạn */}
+                    <div className="bg-slate-50 rounded-lg p-4 shadow-sm">
+                      <label className="block text-base font-semibold text-blue-700 mb-2">Khách sạn</label>
+                      <button
+                        type="button"
+                        className="mb-2 px-2 py-1 text-xs rounded bg-blue-100 text-blue-700 hover:bg-blue-200"
+                        onClick={() => setNewTour(prev => ({
+                          ...prev,
+                          selectedHotels: hotelsByLocation.map(h => String(h.id_hotel || h.id))
+                        }))}
+                      >
+                        Chọn tất cả
+                      </button>
+                      <div className="flex flex-wrap gap-3">
+                        {(hotelsByLocation.length > 0 ? hotelsByLocation : []).map(hotel => {
+                          const value = String(hotel.id_hotel || hotel.id);
+                          const checked = Array.isArray(newTour.selectedHotels) && newTour.selectedHotels.includes(value);
+                          return (
+                            <label key={value} className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                              <input
+                                type="checkbox"
+                                value={value}
+                                checked={checked}
+                                onChange={e => {
+                                  const { value, checked } = e.target;
+                                  setNewTour(prev => ({
+                                    ...prev,
+                                    selectedHotels: checked
+                                      ? [...prev.selectedHotels, value]
+                                      : prev.selectedHotels.filter(id => id !== value)
+                                  }));
+                                }}
+                                className="accent-blue-600 w-4 h-4 rounded"
+                              />
+                              <span>{hotel.ten_khach_san || hotel.hotel_name || hotel.name}</span>
+                            </label>
+                          );
+                        })}
+                        {selectedLocationId && hotelsByLocation.length === 0 && (
+                          <span className="text-xs text-gray-500">Không có khách sạn nào cho địa điểm này.</span>
+                        )}
+                      </div>
+                    </div>
+                    {/* Dịch vụ bao gồm */}
+                    <div className="bg-slate-50 rounded-lg p-4 shadow-sm">
+                      <label className="block text-base font-semibold text-green-700 mb-2">Dịch vụ bao gồm</label>
+                      <button
+                        type="button"
+                        className="mb-2 px-2 py-1 text-xs rounded bg-green-100 text-green-700 hover:bg-green-200"
+                        onClick={() => setNewTour(prev => ({
+                          ...prev,
+                          selectedIncludedServices: includedServices.map(s => s.id)
+                        }))}
+                      >
+                        Chọn tất cả
+                      </button>
+                      <div className="flex flex-wrap gap-3">
+                        {includedServices.map(service => (
+                          <label key={service.id} className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                            <input
+                              type="checkbox"
+                              value={service.id}
+                              checked={Array.isArray(newTour.selectedIncludedServices) && newTour.selectedIncludedServices.includes(service.id)}
+                              onChange={e => {
+                                const checked = e.target.checked;
+                                setNewTour(prev => ({
+                                  ...prev,
+                                  selectedIncludedServices: checked
+                                    ? [...prev.selectedIncludedServices, service.id]
+                                    : prev.selectedIncludedServices.filter(id => id !== service.id)
+                                }));
+                              }}
+                              className="accent-green-600 w-4 h-4 rounded"
+                              disabled={newTour.hasConfirmedBooking}
+                            />
+                            <span>{service.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Dịch vụ loại trừ */}
+                    <div className="bg-slate-50 rounded-lg p-4 shadow-sm">
+                      <label className="block text-base font-semibold text-red-700 mb-2">Dịch vụ loại trừ</label>
+                      <button
+                        type="button"
+                        className="mb-2 px-2 py-1 text-xs rounded bg-red-100 text-red-700 hover:bg-red-200"
+                        onClick={() => setNewTour(prev => ({
+                          ...prev,
+                          selectedExcludedServices: excludedServices.map(s => s.id)
+                        }))}
+                      >
+                        Chọn tất cả
+                      </button>
+                      <div className="flex flex-wrap gap-3">
+                        {excludedServices.map(service => (
+                          <label key={service.id} className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                            <input
+                              type="checkbox"
+                              value={service.id}
+                              checked={Array.isArray(newTour.selectedExcludedServices) && newTour.selectedExcludedServices.includes(service.id)}
+                              onChange={e => {
+                                const checked = e.target.checked;
+                                setNewTour(prev => ({
+                                  ...prev,
+                                  selectedExcludedServices: checked
+                                    ? [...prev.selectedExcludedServices, service.id]
+                                    : prev.selectedExcludedServices.filter(id => id !== service.id)
+                                }));
+                              }}
+                              className="accent-red-600 w-4 h-4 rounded"
+                              disabled={newTour.hasConfirmedBooking}
+                            />
+                            <span>{service.service_name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg p-4 shadow-sm col-span-2">
+                      <label className="block text-base font-semibold text-indigo-700 mb-2">Địa điểm thuộc điểm đến đã chọn</label>
+                      <button
+                        type="button"
+                        className="mb-2 px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                        onClick={() => {
+                          const location = locations.find(loc => loc.id === selectedLocationId);
+                          if (location && Array.isArray(location.destinations)) {
+                            setSelectedDestinations(location.destinations.map(dest => dest.id));
+                          }
+                        }}
+                      >
+                        Chọn tất cả
+                      </button>
+                      {selectedLocationId ? (
+                        <div className="flex flex-wrap gap-3">
+                          {locations.find(loc => loc.id === selectedLocationId)?.destinations.map(dest => (
+                            <label key={dest.id} className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                              <input
+                                type="checkbox"
+                                value={dest.id}
+                                checked={selectedDestinations.includes(dest.id)}
+                                onChange={e => {
+                                  const checked = e.target.checked;
+                                  setSelectedDestinations(prev =>
+                                    checked ? [...prev, dest.id] : prev.filter(id => id !== dest.id)
+                                  );
+                                }}
+                                className="accent-indigo-600 w-4 h-4 rounded"
+                              />
+                              <span>{dest.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-500">Hãy chọn điểm đến ở bước 1 để hiện địa điểm.</div>
+                      )}
+                    </div>
 
-            {currentStep === 2 && (
-              <div className="flex flex-col gap-6">
-                {/* Danh mục Tour */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Danh mục Tour</label>
-                  <div className="flex flex-wrap gap-4">
-                    {categories.map(category => (
-                      <label key={category.id} className="inline-flex items-center gap-1 text-sm">
-                        <input type="checkbox" value={category.id} checked={Array.isArray(newTour.selectedCategories) && newTour.selectedCategories.includes(category.id)} onChange={e => {
-                          const checked = e.target.checked;
-                          setNewTour(prev => ({
-                            ...prev,
-                            selectedCategories: checked ? [...prev.selectedCategories, category.id] : prev.selectedCategories.filter(id => id !== category.id)
-                          }));
-                        }} />
-                        {category.name}
-                      </label>
-                    ))}
                   </div>
-                </div>
-                {/* Khách sạn */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Khách sạn</label>
-                  <div className="flex flex-wrap gap-4">
-                    {(hotelsByLocation.length > 0 ? hotelsByLocation : []).map(hotel => (
-                      <label key={hotel.id_hotel} className="inline-flex items-center gap-1 text-sm">
-                        <input type="checkbox" value={hotel.id_hotel} checked={Array.isArray(newTour.selectedHotels) && newTour.selectedHotels.includes(hotel.id_hotel)} onChange={e => {
-                          const checked = e.target.checked;
-                          setNewTour(prev => ({
-                            ...prev,
-                            selectedHotels: checked ? [...prev.selectedHotels, hotel.id_hotel] : prev.selectedHotels.filter(id => id !== hotel.id_hotel)
-                          }));
-                        }} />
-                        {hotel.ten_khach_san}
-                      </label>
-                    ))}
-                    {selectedLocationId && hotelsByLocation.length === 0 && (
-                      <span className="text-xs text-gray-500">Không có khách sạn nào cho địa điểm này.</span>
-                    )}
-                  </div>
-                </div>
-                {/* Dịch vụ bao gồm */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Dịch vụ bao gồm</label>
-                  <div className="flex flex-wrap gap-4">
-                    {includedServices.map(service => (
-                      <label key={service.id} className="inline-flex items-center gap-1 text-sm">
-                        <input type="checkbox" value={service.id} checked={Array.isArray(newTour.selectedIncludedServices) && newTour.selectedIncludedServices.includes(service.id)} onChange={e => {
-                          const checked = e.target.checked;
-                          setNewTour(prev => ({
-                            ...prev,
-                            selectedIncludedServices: checked ? [...prev.selectedIncludedServices, service.id] : prev.selectedIncludedServices.filter(id => id !== service.id)
-                          }));
-                        }} />
-                        {service.name}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                {/* Dịch vụ loại trừ */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Dịch vụ loại trừ</label>
-                  <div className="flex flex-wrap gap-4">
-                    {excludedServices.map(service => (
-                      <label key={service.id} className="inline-flex items-center gap-1 text-sm">
-                        <input type="checkbox" value={service.id} checked={Array.isArray(newTour.selectedExcludedServices) && newTour.selectedExcludedServices.includes(service.id)} onChange={e => {
-                          const checked = e.target.checked;
-                          setNewTour(prev => ({
-                            ...prev,
-                            selectedExcludedServices: checked ? [...prev.selectedExcludedServices, service.id] : prev.selectedExcludedServices.filter(id => id !== service.id)
-                          }));
-                        }} />
-                        {service.service_name}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                {/* Địa điểm thuộc điểm đến đã chọn */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Địa điểm thuộc điểm đến đã chọn</label>
-                  {selectedLocationId ? (
-                    <div className="flex flex-wrap gap-4">
-                      {locations.find(loc => loc.id === selectedLocationId)?.destinations.map(dest => (
-                        <label key={dest.id} className="inline-flex items-center gap-1 text-sm">
-                          <input
-                            type="checkbox"
-                            value={dest.id}
-                            checked={selectedDestinations.includes(dest.id)}
-                            onChange={e => {
-                              const checked = e.target.checked;
-                              setSelectedDestinations(prev =>
-                                checked ? [...prev, dest.id] : prev.filter(id => id !== dest.id)
-                              );
-                            }}
-                          />
-                          {dest.name}
-                        </label>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-gray-500">Hãy chọn điểm đến ở bước 1 để hiện địa điểm.</div>
-                  )}
-                </div>
-                <div className="flex justify-end mt-6 gap-2">
-                  <button
-                    onClick={() => setCurrentStep(1)}
-                    className="inline-flex items-center rounded-md bg-slate-200 px-4 py-2 text-slate-700 hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-500"
-                  >
-                    Trở lại
-                  </button>
-                  <button
-                    onClick={handleSaveTour}
-                    className="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-                  >
-                    Xác nhận
-                  </button>
-                </div>
+                )}
               </div>
-            )}
+            </div>
+            <div className="flex justify-end gap-4 mt-6 pt-4 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              >
+                Hủy
+              </button>
+              {currentStep > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentStep(currentStep - 1)}
+                  className="px-4 py-2 text-sm font-medium text-indigo-600 border border-indigo-600 rounded-md hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  Quay lại
+                </button>
+              )}
+              {currentStep < 2 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Validate các trường bắt buộc trước khi chuyển bước
+                    const missingFields = [];
+                    if (!newTour.name) missingFields.push("Tên tour");
+                    if (!newTour.departure_location) missingFields.push("Điểm khởi hành");
+                    if (!selectedLocationId) missingFields.push("Điểm đến");
+                    if (!newTour.tour_type) missingFields.push("Loại tour");
+                    if (images.length === 0) missingFields.push("Hình ảnh tour");
+                    if (missingFields.length > 0) {
+                      alert("Vui lòng nhập đầy đủ thông tin bắt buộc:\n" + missingFields.join(", "));
+                      return;
+                    }
+                    setCurrentStep(currentStep + 1);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  Tiếp theo
+                </button>
+              )}
+              {currentStep === 2 && (
+                <button
+                  type="button"
+                  onClick={handleSaveTour}
+                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  Xác nhận
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

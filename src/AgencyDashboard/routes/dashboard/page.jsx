@@ -15,6 +15,7 @@ const AgencyDashboardPage = () => {
   const [monthlyRevenue, setMonthlyRevenue] = useState([]);
   const [commissionData, setCommissionData] = useState(null);
   const [customerStats, setCustomerStats] = useState(null);
+  const [topTours, setTopTours] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Thêm state cho filter
@@ -41,14 +42,18 @@ const AgencyDashboardPage = () => {
           revenueRes,
           monthlyRes,
           commissionRes,
-          customerRes
+          customerRes,
+          topToursRes
         ] = await Promise.all([
           fetch(`/api/agency/bookings/stats${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } }),
           fetch(`/api/agency/payments/stats${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } }),
           fetch(`/api/agency/payments/revenue${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } }),
           fetch(`/api/agency/payments/monthly${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } }),
           fetch(`/api/agency/payments/commission${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-          fetch(`/api/agency/bookings/customers${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } })
+          fetch(`/api/agency/bookings/customers${queryParams}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+          fetch('http://localhost:5000/api/agency/bookings/top-tours', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          })
         ]);
 
         const bookingData = await bookingStatsRes.json();
@@ -57,6 +62,7 @@ const AgencyDashboardPage = () => {
         const monthlyRevenueData = await monthlyRes.json();
         const commissionDataRes = await commissionRes.json();
         const customerData = await customerRes.json();
+        const topToursData = await topToursRes.json();
 
         setBookingStats(bookingData);
         setPaymentStats(paymentData);
@@ -64,6 +70,7 @@ const AgencyDashboardPage = () => {
         setMonthlyRevenue(monthlyRevenueData);
         setCommissionData(commissionDataRes);
         setCustomerStats(customerData);
+        setTopTours(Array.isArray(topToursData.topTours) ? topToursData.topTours : []);
         
         // Debug data
         console.log('Monthly Revenue:', monthlyRevenueData);
@@ -137,7 +144,7 @@ const AgencyDashboardPage = () => {
         <div className="flex items-center gap-3">
           <div className="bg-white rounded-lg px-4 py-2 shadow-sm border flex items-center gap-2">
             <Calendar size={16} className="text-gray-400" />
-            <select
+            {/* <select
               value={timeFilter}
               onChange={(e) => setTimeFilter(e.target.value)}
               className="text-sm text-gray-600 border-none bg-transparent outline-none cursor-pointer"
@@ -145,11 +152,11 @@ const AgencyDashboardPage = () => {
               <option value="tuần này">Tuần này</option>
               <option value="tháng">Theo tháng</option>
               <option value="năm">Theo năm</option>
-            </select>
+            </select> */}
             
             {(timeFilter === 'tháng' || timeFilter === 'tuần này') && (
               <>
-                <select
+                {/* <select
                   value={selectedMonth}
                   onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
                   className="text-sm text-gray-600 border border-gray-200 rounded px-2 py-1 ml-2"
@@ -170,22 +177,22 @@ const AgencyDashboardPage = () => {
                       {y}
                     </option>
                   ))}
-                </select>
+                </select> */}
               </>
-            )}
+            //)}
             
-            {timeFilter === 'năm' && (
-              <select
-                value={selectedYear}
-                onChange={(e) => setSelectedYear(parseInt(e.target.value))}
-                className="text-sm text-gray-600 border border-gray-200 rounded px-2 py-1 ml-2"
-              >
-                {years.map(y => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
+              // {timeFilter === 'năm' && (
+              // <select
+              //   value={selectedYear}
+              //   onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+              //   className="text-sm text-gray-600 border border-gray-200 rounded px-2 py-1 ml-2"
+              // >
+              //   {years.map(y => (
+              //     <option key={y} value={y}>
+              //       {y}
+              //     </option>
+              //   ))}
+              // </select>
             )}
             <Filter size={16} className="text-blue-500" />
           </div>
@@ -592,7 +599,7 @@ const AgencyDashboardPage = () => {
       {/* Top Tours Table */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-gray-900">Top Tours theo doanh thu</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Top Tours nổi bật</h2>
           <button className="bg-blue-50 text-blue-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors flex items-center gap-2">
             <Download size={16} />
             Xuất báo cáo
@@ -603,36 +610,20 @@ const AgencyDashboardPage = () => {
             <thead>
               <tr className="border-b border-gray-200">
                 <th className="text-left py-3 px-4 font-semibold text-gray-900">Tên Tour</th>
-                <th className="text-left py-3 px-4 font-semibold text-gray-900">Số booking</th>
-                <th className="text-left py-3 px-4 font-semibold text-gray-900">Doanh thu</th>
-                <th className="text-left py-3 px-4 font-semibold text-gray-900">Hoa hồng</th>
-                <th className="text-left py-3 px-4 font-semibold text-gray-900">Tỷ lệ</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-900">Điểm đến</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-900">Số booking đã xác nhận</th>
               </tr>
             </thead>
             <tbody>
-              {bookingStats?.topTours?.length > 0 ? bookingStats.topTours.map((tour, index) => (
-                <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
+              {topTours.length > 0 ? topTours.map((tour, index) => (
+                <tr key={tour.id || index} className="border-b border-gray-100 hover:bg-gray-50">
                   <td className="py-3 px-4 font-medium text-gray-900">{tour.name}</td>
-                  <td className="py-3 px-4 text-gray-600">{tour.bookingCount}</td>
-                  <td className="py-3 px-4 font-semibold text-green-600">{formatVND(tour.revenue)}</td>
-                  <td className="py-3 px-4 font-semibold text-purple-600">{formatVND(tour.commission)}</td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-blue-500 h-2 rounded-full" 
-                          style={{ width: `${Math.min((tour.revenue / (bookingStats?.topTours?.[0]?.revenue || 1)) * 100, 100)}%` }}
-                        ></div>
-                      </div>
-                      <span className="text-sm text-gray-500">
-                        {Math.round((tour.revenue / (bookingStats?.topTours?.[0]?.revenue || 1)) * 100)}%
-                      </span>
-                    </div>
-                  </td>
+                  <td className="py-3 px-4 text-gray-600">{tour.destination || '-'}</td>
+                  <td className="py-3 px-4 font-semibold text-green-600">{tour.confirmedBookings || 0}</td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={5} className="text-center py-8 text-gray-400">
+                  <td colSpan={3} className="text-center py-8 text-gray-400">
                     <div className="flex flex-col items-center gap-2">
                       <TrendingUp size={48} className="text-gray-300" />
                       <span>Không có dữ liệu tour</span>

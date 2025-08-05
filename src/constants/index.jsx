@@ -86,6 +86,11 @@ export const navbarLinks = [
                 path: "/admin/commissions",
                 adminOnly: true,
             },
+            {
+                label: "Quản Lý Hoàn Tiền",
+                icon: CreditCard,
+                path: "/admin/refunds",
+            }
         ],
     },
     {

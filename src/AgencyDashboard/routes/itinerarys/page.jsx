@@ -16,8 +16,15 @@ const ItineraryManagementPage = () => {
     day_number: 1,
     title: "",
     description: "",
+    location_ids: [],
   });
+  const [locationInput, setLocationInput] = useState("");
+  const [selectedLocations, setSelectedLocations] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
+  const [allLocations, setAllLocations] = useState([]);
+  const [filteredLocations, setFilteredLocations] = useState([]);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
 
   const API_BASE_URL = "http://localhost:5000/api/itineraries";
 
@@ -25,7 +32,12 @@ const ItineraryManagementPage = () => {
   const fetchItineraries = async () => {
     try {
       setLoading(true);
-      const response = await fetch(API_BASE_URL);
+      const response = await fetch(API_BASE_URL, {
+        headers: {
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
+          "Content-Type": "application/json"
+        }
+      });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -43,6 +55,21 @@ const ItineraryManagementPage = () => {
   // Load itineraries on component mount
   useEffect(() => {
     fetchItineraries();
+    // Fetch all locations for dropdown
+    const fetchLocations = async () => {
+      try {
+        const res = await fetch("http://localhost:5000/api/locations", {
+          headers: {
+            "Authorization": `Bearer ${localStorage.getItem('token')}`,
+          },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setAllLocations(Array.isArray(data.data) ? data.data : []);
+        setFilteredLocations(Array.isArray(data.data) ? data.data : []);
+      } catch (err) {}
+    };
+    fetchLocations();
   }, []);
 
   // Filter itineraries based on search term
@@ -83,8 +110,12 @@ const ItineraryManagementPage = () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
         },
-        body: JSON.stringify(itineraryData),
+        body: JSON.stringify({
+          ...itineraryData,
+          location_ids: itineraryData.location_ids || [],
+        }),
       });
 
       if (!response.ok) {
@@ -109,8 +140,12 @@ const ItineraryManagementPage = () => {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
         },
-        body: JSON.stringify(itineraryData),
+        body: JSON.stringify({
+          ...itineraryData,
+          location_ids: itineraryData.location_ids || [],
+        }),
       });
 
       if (!response.ok) {
@@ -135,6 +170,9 @@ const ItineraryManagementPage = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/${id}`, {
         method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${localStorage.getItem('token')}`,
+        },
       });
 
       if (!response.ok) {
@@ -196,8 +234,9 @@ const ItineraryManagementPage = () => {
       day_number: 1,
       title: "",
       description: "",
+      location_ids: [],
     });
-    setErrorMessage("");
+    setLocationInput("");
   };
 
   // Handle edit button click
@@ -208,7 +247,9 @@ const ItineraryManagementPage = () => {
       day_number: itinerary.day_number || 1,
       title: itinerary.title || "",
       description: itinerary.description || "",
+      location_ids: Array.isArray(itinerary.locations) ? itinerary.locations.map(loc => loc.id) : [],
     });
+    setSelectedLocations(Array.isArray(itinerary.locations) ? itinerary.locations.map(loc => loc.id) : []);
     setIsModalOpen(true);
     setDropdownOpenId(null);
     setErrorMessage("");
@@ -218,6 +259,7 @@ const ItineraryManagementPage = () => {
   const handleAddNew = () => {
     setEditingItinerary(null);
     resetForm();
+    setSelectedLocations([]);
     setIsModalOpen(true);
   };
 
@@ -232,6 +274,57 @@ const ItineraryManagementPage = () => {
     setEditingItinerary(null);
     resetForm();
   };
+
+  // Thêm location vào lịch trình
+  const addLocationsToItinerary = async (id, locationIds) => {
+    const response = await fetch(`${API_BASE_URL}/${id}/locations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${localStorage.getItem('token')}`,
+      },
+      body: JSON.stringify({ location_ids: locationIds }),
+    });
+    // ...handle response...
+  }
+
+  // Xóa location khỏi lịch trình
+  const removeLocationsFromItinerary = async (id, locationIds) => {
+    const response = await fetch(`${API_BASE_URL}/${id}/locations`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${localStorage.getItem('token')}`,
+      },
+      body: JSON.stringify({ location_ids: locationIds }),
+    });
+    // ...handle response...
+  }
+
+  // Khi nhập tour_id, tự động lọc location
+  useEffect(() => {
+    if (!newItinerary.tour_id) {
+      setFilteredLocations(allLocations);
+      return;
+    }
+    // Giả sử bạn có danh sách tour hoặc API lấy tour theo id
+    const fetchTour = async () => {
+      try {
+        const res = await fetch(`http://localhost:5000/api/tours/${newItinerary.tour_id}`);
+        if (!res.ok) return setFilteredLocations(allLocations);
+        const data = await res.json();
+        const tour = data.data || {};
+        // Lọc location theo tour.location (ví dụ: Quảng Ninh)
+        const matched = allLocations.filter(loc =>
+          loc.name?.toLowerCase().includes((tour.location || '').toLowerCase())
+        );
+        setFilteredLocations(matched.length > 0 ? matched : allLocations);
+      } catch {
+        setFilteredLocations(allLocations);
+      }
+    };
+    fetchTour();
+  }, [newItinerary.tour_id, allLocations]);
 
   if (loading) {
     return (
@@ -334,6 +427,43 @@ const ItineraryManagementPage = () => {
                   className="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   placeholder="Mô tả chi tiết hoạt động trong ngày"
                 />
+              </div>
+
+              {/* Locations Dropdown */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Chọn địa điểm</label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  value=""
+                  onChange={e => {
+                    const locId = e.target.value;
+                    if (locId && !selectedLocations.includes(locId)) {
+                      setSelectedLocations([...selectedLocations, locId]);
+                      setNewItinerary({ ...newItinerary, location_ids: [...selectedLocations, locId] });
+                    }
+                  }}
+                >
+                  <option value="">-- Chọn địa điểm --</option>
+                  {filteredLocations.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name || loc.id}</option>
+                  ))}
+                </select>
+                {/* Hiển thị danh sách location đã chọn */}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {selectedLocations.map((locId, idx) => {
+                    const locObj = allLocations.find(l => l.id === locId);
+                    return (
+                      <span key={locId} className="bg-gray-200 px-2 py-1 rounded text-xs flex items-center gap-1">
+                        {locObj ? locObj.name : locId}
+                        <button type="button" className="ml-1 text-red-500" onClick={() => {
+                          const updated = selectedLocations.filter(id => id !== locId);
+                          setSelectedLocations(updated);
+                          setNewItinerary({ ...newItinerary, location_ids: updated });
+                        }}>×</button>
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
               
               <div className="flex justify-end gap-3 pt-4">
@@ -478,6 +608,12 @@ const ItineraryManagementPage = () => {
         showSizeChanger={true}
         pageSizeOptions={[5, 10, 20, 50]}
       />
+
+      {showToast && (
+        <div style={{position: 'fixed', bottom: 32, right: 32, zIndex: 9999}} className="bg-green-600 text-white px-6 py-3 rounded shadow-lg animate-fade-in">
+          {toastMessage}
+        </div>
+      )}
     </div>
   );
 };

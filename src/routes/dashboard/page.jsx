@@ -114,9 +114,9 @@ const DashboardPage = () => {
               onChange={(e) => setTimeFilter(e.target.value)}
               className="text-sm text-gray-600 border-none bg-transparent outline-none cursor-pointer"
             >
-              <option value="tuần này">Tuần này</option>
+              {/* <option value="tuần này">Tuần này</option>
               <option value="tháng">Theo tháng</option>
-              <option value="năm">Theo năm</option>
+              <option value="năm">Theo năm</option> */}
             </select>
             {/* Chọn tháng nếu lọc theo tháng */}
             {timeFilter === 'tháng' && (
@@ -363,8 +363,17 @@ const DashboardPage = () => {
             </div>
           </div>
 
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={paymentRevenue?.dailyChart?.slice(-7) || []}>
+          {/* Sort chart data before rendering */}
+          {/* Chart Order */}
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart
+              data={
+                Array.isArray(paymentRevenue?.dailyChart)
+                  ? [...paymentRevenue.dailyChart].sort((a, b) => new Date(a.date) - new Date(b.date))
+                  : []
+              }
+              margin={{ top: 40, right: 0, left: 0, bottom: 0 }}
+            >
               <defs>
                 <linearGradient id="colorOrderRevenue" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
@@ -382,7 +391,12 @@ const DashboardPage = () => {
                   return days[date.getDay()];
                 }}
               />
-              <YAxis hide />
+              <YAxis
+                axisLine={false}
+                tickLine={false}
+                tick={{ fontSize: 12, fill: '#6B7280' }}
+                tickFormatter={(value) => `${Math.floor(value / 1000000)}Tr`}
+              />
               <Tooltip
                 contentStyle={{
                   backgroundColor: 'white',
@@ -405,7 +419,8 @@ const DashboardPage = () => {
       </div>
 
       {/* Bottom Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      {/* Bottom Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
         {/* Total Revenue Chart */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border">
           <h3 className="text-lg font-semibold text-gray-900 mb-6">Tổng doanh thu</h3>

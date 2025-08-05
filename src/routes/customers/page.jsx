@@ -110,7 +110,7 @@ export default function UserManagementPage() {
 
       // Filter for approved agencies that don't have a user account yet
       const unassignedAgencies = agenciesData.filter(
-        (agency) => agency.status === 'approved' && !agency.user_id
+        (agency) => agency.status === 'approved' 
       );
       setPendingAgencies(unassignedAgencies);
       console.log('✅ Pending agencies for user creation:', unassignedAgencies.length);

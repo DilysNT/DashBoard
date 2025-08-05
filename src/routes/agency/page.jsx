@@ -66,12 +66,12 @@ export default function AgencyManagementPage() {
           'Content-Type': 'application/json',
         },
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || 'Failed to approve agency');
       }
-      
+
       // Refresh the agencies list after approval
       await fetchAgencies();
       alert("Agency đã được duyệt thành công!");
@@ -92,12 +92,12 @@ export default function AgencyManagementPage() {
           'Content-Type': 'application/json',
         },
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || 'Failed to reject agency');
       }
-      
+
       // Refresh the agencies list after rejection
       await fetchAgencies();
       alert("Agency đã bị từ chối!");
@@ -208,10 +208,10 @@ export default function AgencyManagementPage() {
     try {
       const token = localStorage.getItem('token');
       const method = editingAgency ? 'PUT' : 'POST';
-      const url = editingAgency 
+      const url = editingAgency
         ? `http://localhost:5000/api/agencies/${editingAgency.id}`
         : 'http://localhost:5000/api/agencies';
-      
+
       const response = await fetch(url, {
         method,
         headers: {
@@ -220,12 +220,12 @@ export default function AgencyManagementPage() {
         },
         body: JSON.stringify(newAgency),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || `Failed to ${editingAgency ? 'update' : 'add'} agency`);
       }
-      
+
       // Refresh the agencies list
       await fetchAgencies();
       setNewAgency({
@@ -288,13 +288,13 @@ export default function AgencyManagementPage() {
           <h1 className="text-3xl font-bold text-slate-900">Quản lý Đại lý Du lịch</h1>
           <p className="text-slate-600 mt-1">Quản lý các agency du lịch</p>
         </div>
-        <button
+        {/* <button
           onClick={() => { setEditingAgency(null); setIsModalOpen(true); }}
           className="inline-flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <Plus size={20} />
           Thêm Agency
-        </button>
+        </button> */}
       </div>
 
       {isModalOpen && (
@@ -516,6 +516,17 @@ export default function AgencyManagementPage() {
                           </li>
                         )}
                         {agency.status === "suspended" && (
+                          <li>
+                            <button
+                              role="menuitem"
+                              onClick={() => handleToggleStatus(agency.id, null)}
+                              className="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center"
+                            >
+                              <Unlock size={16} className="mr-2" /> Mở khóa
+                            </button>
+                          </li>
+                        )}
+                        {agency.status === "locked" && (
                           <li>
                             <button
                               role="menuitem"

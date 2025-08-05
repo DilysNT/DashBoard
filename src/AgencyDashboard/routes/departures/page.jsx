@@ -13,12 +13,16 @@ const DepartureManagementPage = () => {
   const [dropdownOpenId, setDropdownOpenId] = useState(null);
   const [newDeparture, setNewDeparture] = useState({
     tour_id: "",
+    itinerary_id: "",
     departure_date: "",
+    number_of_days: 1,
+    number_of_nights: 0,
     note: "",
   });
   const [errorMessage, setErrorMessage] = useState("");
   const [confirmDelete, setConfirmDelete] = useState({ open: false, departure: null });
   const [showRefundInfo, setShowRefundInfo] = useState(false);
+  const [resultDialog, setResultDialog] = useState({ open: false, message: "", type: "success" });
 
   const API_BASE_URL = "http://localhost:5000/api/departure-dates";
 
@@ -190,9 +194,12 @@ const DepartureManagementPage = () => {
         method: "POST",
         headers: headers,
         body: JSON.stringify({
-          tour_id: "c3bc8cc7-a1a9-4095-a7f3-7b588122dee8",
-          departure_date: "2025-08-06",
-          note: ""
+          tour_id: departureData.tour_id,
+          itinerary_id: departureData.itinerary_id,
+          departure_date: departureData.departure_date,
+          number_of_days: departureData.number_of_days,
+          number_of_nights: departureData.number_of_nights,
+          note: departureData.note
         }),
       });
 
@@ -214,20 +221,21 @@ const DepartureManagementPage = () => {
       const newDeparture = await response.json();
       console.log("Created departure successfully:", newDeparture);
       setDepartures(prev => [...prev, { ...newDeparture, bookings: [] }]);
-      setErrorMessage("Thêm ngày khởi hành thành công!");
+      setResultDialog({ open: true, message: "Thêm ngày khởi hành thành công!", type: "success" });
       return true;
     } catch (error) {
       console.error("Error creating departure:", error);
+      let msg = error.message || "Không thể tạo ngày khởi hành mới. Vui lòng thử lại!";
 
       if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-        setErrorMessage("Không thể kết nối tới server. Vui lòng kiểm tra kết nối mạng và thử lại!");
+        msg = "Không thể kết nối tới server. Vui lòng kiểm tra kết nối mạng và thử lại!";
       } else if (error.message.includes('401')) {
-        setErrorMessage("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!");
+        msg = "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!";
       } else if (error.message.includes('403')) {
-        setErrorMessage("Bạn không có quyền tạo ngày khởi hành cho tour này!");
-      } else {
-        setErrorMessage(error.message || "Không thể tạo ngày khởi hành mới. Vui lòng thử lại!");
+        msg = "Bạn không có quyền tạo ngày khởi hành cho tour này!";
       }
+
+      setResultDialog({ open: true, message: msg, type: "error" });
       return false;
     }
   };
@@ -253,7 +261,14 @@ const DepartureManagementPage = () => {
       const response = await fetch(`${API_BASE_URL}/${id}`, {
         method: "PUT",
         headers: headers,
-        body: JSON.stringify(departureData),
+        body: JSON.stringify({
+          tour_id: departureData.tour_id,
+          itinerary_id: departureData.itinerary_id,
+          departure_date: departureData.departure_date,
+          number_of_days: departureData.number_of_days,
+          number_of_nights: departureData.number_of_nights,
+          note: departureData.note
+        }),
       });
 
       console.log("Update response status:", response.status);
@@ -275,6 +290,7 @@ const DepartureManagementPage = () => {
       setDepartures(prev => prev.map(departure =>
         departure.id === id ? { ...updatedDeparture, bookings: departure.bookings || [] } : departure
       ));
+      setResultDialog({ open: true, message: "Cập nhật ngày khởi hành thành công!", type: "success" });
       return true;
     } catch (error) {
       console.error("Error updating departure:", error);
@@ -414,7 +430,10 @@ const DepartureManagementPage = () => {
   const resetForm = () => {
     setNewDeparture({
       tour_id: "",
+      itinerary_id: "",
       departure_date: "",
+      number_of_days: 1,
+      number_of_nights: 0,
       note: "",
     });
     setErrorMessage("");
@@ -425,7 +444,10 @@ const DepartureManagementPage = () => {
     setEditingDeparture(departure);
     setNewDeparture({
       tour_id: departure.tour_id || "",
+      itinerary_id: departure.itinerary_id || "",
       departure_date: departure.departure_date || "",
+      number_of_days: departure.number_of_days || 1,
+      number_of_nights: departure.number_of_nights || 0,
       note: departure.note || "",
     });
     setIsModalOpen(true);
@@ -570,6 +592,40 @@ const DepartureManagementPage = () => {
                   placeholder="Ghi chú thêm về ngày khởi hành"
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Itinerary ID</label>
+                <input
+                  type="text"
+                  value={newDeparture.itinerary_id}
+                  onChange={e => setNewDeparture({ ...newDeparture, itinerary_id: e.target.value })}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  placeholder="Nhập ID hành trình (nếu có)"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Số ngày <span className="text-red-500">*</span></label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={newDeparture.number_of_days}
+                    onChange={e => setNewDeparture({ ...newDeparture, number_of_days: parseInt(e.target.value) || 1 })}
+                    required
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Số đêm <span className="text-red-500">*</span></label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={newDeparture.number_of_nights}
+                    onChange={e => setNewDeparture({ ...newDeparture, number_of_nights: parseInt(e.target.value) || 0 })}
+                    required
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button
                   onClick={closeModal}
@@ -670,8 +726,8 @@ const DepartureManagementPage = () => {
                   <td className="px-4 py-3 text-sm text-slate-700">
                     {departure.bookings ? (
                       <span className={`text-xs font-medium px-2.5 py-0.5 rounded ${departure.bookings.length > 0
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-gray-100 text-gray-800'
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-gray-100 text-gray-800'
                         }`}>
                         {departure.bookings.length} booking{departure.bookings.length !== 1 ? 's' : ''}
                       </span>
@@ -786,6 +842,25 @@ const DepartureManagementPage = () => {
                 className="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
               >
                 Tiếp tục xóa và hoàn tiền
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Result Dialog */}
+      {resultDialog.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <h2 className="text-xl font-semibold mb-4">
+              {resultDialog.type === "success" ? "Thành công" : "Lỗi"}
+            </h2>
+            <p className="mb-4 text-gray-700">{resultDialog.message}</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setResultDialog({ open: false, message: "", type: "success" })}
+                className="px-4 py-2 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+              >
+                Đóng
               </button>
             </div>
           </div>
